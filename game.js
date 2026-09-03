@@ -214,7 +214,7 @@
     const ph = 14;
     paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 38 - ph, r: 7 };
 
-    const diameter = Math.max(brickPx * 15.68, 40);
+    const diameter = Math.max(brickPx * 7.84, 20);
     ball = {
       r: diameter / 2,
       x: 0, y: 0, vx: 0, vy: 0,
