@@ -1,31 +1,33 @@
-/* Mech Bricks — piedra pesada, +7000 ladrillos, se parten con golpes */
+/* Mech Arkanoid — silueta del mech, paleta genérica, bola de metal, HP 2–3 */
 (() => {
-  const { Engine, Render, Runner, Bodies, Body, Composite, Events, Query, Mouse, MouseConstraint } = Matter;
-
   const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
   const stage = document.getElementById('stage');
   const loading = document.getElementById('loading');
   const hint = document.getElementById('hint');
   const countEl = document.getElementById('count');
-  const shatterBtn = document.getElementById('shatter');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
   const resetBtn = document.getElementById('reset');
 
   const IMG_SRC = 'mech.png';
   const MIN_BRICKS = 7000;
   const MAX_BRICKS = 12000;
-  const MAX_BODIES = 16000;
-  const BREAK_SPEED = 6.5;      // impacto entre cuerpos
-  const HAMMER_SPEED = 9;       // golpe con el dedo
-  const MAX_GEN = 2;            // cuántas veces puede partirse un ladrillo
+  const START_LIVES = 3;
 
-  let engine, runner, render, mouseConstraint;
-  let brickBodies = [];
-  let shattered = false;
-  let walls = [];
-  let imgData = null;
-  let imgW = 0, imgH = 0;
-  let breaking = false;
-  let lastHammer = 0;
+  let W = 0, H = 0, dpr = 1;
+  let imgData = null, imgW = 0, imgH = 0;
+  let bricks = [];
+  let grid = null;
+  let cols = 0, rows = 0, cell = 6;
+  let brickPx = 8, cellScreen = 8;
+  let originX = 0, originY = 0;
+  let brickLayer = null;
+  let paddle, ball;
+  let running = false, launched = false, gameOver = false, won = false;
+  let score = 0, lives = START_LIVES, aliveCount = 0;
+  let pointerX = null;
+  let lastTs = 0;
 
   function size() {
     return {
@@ -34,47 +36,31 @@
     };
   }
 
-  function isBackground(r, g, b, a) {
-    // Cut-out PNG: transparent (and near-transparent) is empty space
-    if (a < 28) return true;
-    return false;
+  function resizeCanvas() {
+    const s = size();
+    W = s.w; H = s.h;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function avgCell(data, iw, ix, iy, cell) {
+  function avgCell(ix, iy, cellSize) {
     let r = 0, g = 0, b = 0, n = 0;
-    const x0 = Math.floor(ix * cell);
-    const y0 = Math.floor(iy * cell);
-    const x1 = Math.min(iw, x0 + cell);
-    const y1 = Math.min(imgH, y0 + cell);
+    const x0 = ix * cellSize, y0 = iy * cellSize;
+    const x1 = Math.min(imgW, x0 + cellSize);
+    const y1 = Math.min(imgH, y0 + cellSize);
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {
-        const i = (y * iw + x) * 4;
-        const a = data[i + 3];
-        const rr = data[i], gg = data[i + 1], bb = data[i + 2];
-        if (isBackground(rr, gg, bb, a)) continue;
-        r += rr; g += gg; b += bb; n++;
+        const i = (y * imgW + x) * 4;
+        if (imgData[i + 3] < 28) continue;
+        r += imgData[i]; g += imgData[i + 1]; b += imgData[i + 2]; n++;
       }
     }
-    if (n < Math.max(2, (cell * cell) * 0.12)) return null;
+    if (n < Math.max(2, cellSize * cellSize * 0.12)) return null;
     return { r: (r / n) | 0, g: (g / n) | 0, b: (b / n) | 0 };
-  }
-
-  function stoneOptions(color, gen) {
-    return {
-      friction: 0.95,
-      frictionStatic: 1.2,
-      frictionAir: 0.0015,
-      restitution: 0.015,
-      density: 0.045,
-      slop: 0.02,
-      render: {
-        fillStyle: color,
-        strokeStyle: 'rgba(0,0,0,0.45)',
-        lineWidth: 0.6,
-      },
-      label: 'brick',
-      plugin: { gen: gen || 0, color },
-    };
   }
 
   function loadImage() {
@@ -88,9 +74,9 @@
         h = Math.round(h * scale);
         const off = document.createElement('canvas');
         off.width = w; off.height = h;
-        const ctx = off.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(img, 0, 0, w, h);
-        imgData = ctx.getImageData(0, 0, w, h).data;
+        const c = off.getContext('2d', { willReadFrequently: true });
+        c.drawImage(img, 0, 0, w, h);
+        imgData = c.getImageData(0, 0, w, h).data;
         imgW = w; imgH = h;
         resolve();
       };
@@ -99,318 +85,371 @@
     });
   }
 
-  function clearWorld() {
-    if (!engine) return;
-    Composite.clear(engine.world, false);
-    brickBodies = [];
-    walls = [];
-    if (mouseConstraint) Composite.add(engine.world, mouseConstraint);
-  }
-
-  function addBounds(W, H) {
-    const t = 100;
-    const opts = {
-      isStatic: true,
-      friction: 1,
-      frictionStatic: 1,
-      restitution: 0.01,
-      render: { visible: false },
-      label: 'wall',
-    };
-    walls = [
-      Bodies.rectangle(W / 2, H + t / 2, W + 400, t, opts),
-      Bodies.rectangle(-t / 2, H / 2, t, H * 3, opts),
-      Bodies.rectangle(W + t / 2, H / 2, t, H * 3, opts),
-    ];
-    Composite.add(engine.world, walls);
-  }
-
-  function pickCellForMinBricks() {
-    // Smaller cell → more bricks. Find largest cell that still yields >= MIN_BRICKS.
-    for (let cell = 14; cell >= 5; cell--) {
-      const cols = Math.ceil(imgW / cell);
-      const rows = Math.ceil(imgH / cell);
+  function pickCell() {
+    for (let c = 14; c >= 5; c--) {
+      const ccols = Math.ceil(imgW / c);
+      const crows = Math.ceil(imgH / c);
       let n = 0;
-      for (let iy = 0; iy < rows; iy++) {
-        for (let ix = 0; ix < cols; ix++) {
-          if (avgCell(imgData, imgW, ix, iy, cell)) n++;
-          if (n >= MIN_BRICKS) return cell;
+      for (let iy = 0; iy < crows; iy++) {
+        for (let ix = 0; ix < ccols; ix++) {
+          if (avgCell(ix, iy, c)) {
+            n++;
+            if (n >= MIN_BRICKS) return c;
+          }
         }
       }
     }
     return 5;
   }
 
-  function buildBricks() {
-    const { w: W, h: H } = size();
-    clearWorld();
-    addBounds(W, H);
+  function shade(color, factor) {
+    const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(color);
+    if (!m) return color;
+    return `rgb(${(m[1] * factor) | 0},${(m[2] * factor) | 0},${(m[3] * factor) | 0})`;
+  }
 
-    const pad = 16;
+  function drawBrickToLayer(br) {
+    const lctx = brickLayer.getContext('2d');
+    const pad = 0.35;
+    lctx.clearRect(br.x - 0.5, br.y - 0.5, br.w + 1, br.h + 1);
+    if (!br.alive) return;
+    const t = br.hp / br.maxHp;
+    lctx.fillStyle = shade(br.color, 0.52 + 0.48 * t);
+    lctx.fillRect(br.x + pad, br.y + pad, br.w - pad * 2, br.h - pad * 2);
+    if (br.maxHp >= 3) {
+      lctx.strokeStyle = 'rgba(255,196,70,0.4)';
+      lctx.lineWidth = 1;
+      lctx.strokeRect(br.x + 0.8, br.y + 0.8, br.w - 1.6, br.h - 1.6);
+    } else if (br.hp < br.maxHp) {
+      lctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      lctx.beginPath();
+      lctx.moveTo(br.x + 1, br.y + br.h * 0.35);
+      lctx.lineTo(br.x + br.w - 1, br.y + br.h * 0.7);
+      lctx.stroke();
+    }
+  }
+
+  function updateHud() {
+    countEl.textContent = `${aliveCount} ladrillos`;
+    scoreEl.textContent = `${score} pts`;
+    livesEl.textContent = `Vidas ${lives}`;
+  }
+
+  function stickBallToPaddle() {
+    ball.x = paddle.x + paddle.w / 2;
+    ball.y = paddle.y - ball.r - 2;
+    ball.vx = 0;
+    ball.vy = 0;
+  }
+
+  function buildLevel() {
+    resizeCanvas();
+    cell = pickCell();
+    cols = Math.ceil(imgW / cell);
+    rows = Math.ceil(imgH / cell);
+
+    const pad = 12;
+    const paddleSpace = 92;
     const availW = W - pad * 2;
-    const availH = H - pad * 2 - 20;
+    const availH = H - pad * 2 - paddleSpace;
     const fit = Math.min(availW / imgW, availH / imgH);
-    const drawW = imgW * fit;
-    const drawH = imgH * fit;
-    const originX = (W - drawW) / 2;
-    const originY = (H - drawH) / 2 + 8;
+    brickPx = Math.max(3.5, cell * fit * 0.96);
+    cellScreen = cell * fit;
+    originX = (W - imgW * fit) / 2;
+    originY = pad + 6;
 
-    const useCell = pickCellForMinBricks();
-    const cols = Math.ceil(imgW / useCell);
-    const rows = Math.ceil(imgH / useCell);
-    const brickPx = Math.max(3.5, useCell * fit * 0.96);
-    const list = [];
+    bricks = [];
+    grid = new Int32Array(cols * rows);
+    grid.fill(-1);
 
     for (let iy = 0; iy < rows; iy++) {
       for (let ix = 0; ix < cols; ix++) {
-        if (list.length >= MAX_BRICKS) break;
-        const c = avgCell(imgData, imgW, ix, iy, useCell);
+        if (bricks.length >= MAX_BRICKS) break;
+        const c = avgCell(ix, iy, cell);
         if (!c) continue;
-        const cx = originX + (ix * useCell + useCell / 2) * fit;
-        const cy = originY + (iy * useCell + useCell / 2) * fit;
-        const color = `rgb(${c.r},${c.g},${c.b})`;
-        const body = Bodies.rectangle(cx, cy, brickPx, brickPx, {
-          ...stoneOptions(color, 0),
-          isStatic: true,
-        });
-        body._brick = true;
-        body._gen = 0;
-        body._color = color;
-        body._size = brickPx;
-        list.push(body);
+        const maxHp = Math.random() < 0.22 ? 3 : 2;
+        const br = {
+          ix, iy,
+          x: originX + ix * cellScreen,
+          y: originY + iy * cellScreen,
+          w: brickPx,
+          h: brickPx,
+          color: `rgb(${c.r},${c.g},${c.b})`,
+          hp: maxHp,
+          maxHp,
+          alive: true,
+        };
+        grid[iy * cols + ix] = bricks.length;
+        bricks.push(br);
       }
     }
 
-    brickBodies = list;
-    Composite.add(engine.world, list);
-    countEl.textContent = `${list.length} ladrillos`;
-    shattered = false;
+    brickLayer = document.createElement('canvas');
+    brickLayer.width = Math.floor(W * dpr);
+    brickLayer.height = Math.floor(H * dpr);
+    const lctx = brickLayer.getContext('2d');
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lctx.clearRect(0, 0, W, H);
+    for (const br of bricks) drawBrickToLayer(br);
+
+    aliveCount = bricks.length;
+    score = 0;
+    lives = START_LIVES;
+    gameOver = false;
+    won = false;
+    launched = false;
+    updateHud();
+
+    const pw = Math.min(118, W * 0.3);
+    const ph = 14;
+    paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 38 - ph, r: 7 };
+
+    const diameter = Math.max(brickPx * 0.98, 5);
+    ball = {
+      r: diameter / 2,
+      x: 0, y: 0, vx: 0, vy: 0,
+      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)),
+    };
+    stickBallToPaddle();
+
     hint.classList.add('show');
-    hint.innerHTML = '<strong>Toca para derribar</strong><span>Piedra pesada — golpea para romper</span>';
+    hint.innerHTML = '<strong>Desliza la paleta</strong><span>Toca para lanzar la bola de metal</span>';
+    running = true;
   }
 
-  function updateCount() {
-    const n = brickBodies.filter((b) => b._brick && !b.isSleeping || b._brick).length;
-    const live = engine.world.bodies.filter((b) => b._brick).length;
-    countEl.textContent = `${live} ladrillos`;
-  }
-
-  function shatter() {
-    if (shattered || !brickBodies.length) return;
-    shattered = true;
+  function launch() {
+    if (launched || gameOver || won) return;
+    launched = true;
     hint.classList.remove('show');
-    // Separación mínima: caen como bloques, no flotan
-    for (const b of brickBodies) {
-      Body.setStatic(b, false);
-      Body.setVelocity(b, {
-        x: (Math.random() - 0.5) * 0.6,
-        y: Math.random() * 0.3,
-      });
-      Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.04);
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.65;
+    ball.vx = Math.cos(angle) * ball.speed;
+    ball.vy = Math.sin(angle) * ball.speed;
+  }
+
+  function loseLife() {
+    lives--;
+    updateHud();
+    if (lives <= 0) {
+      gameOver = true;
+      launched = false;
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Game over</strong><span>Pulsa Reiniciar</span>';
+      return;
     }
+    launched = false;
+    stickBallToPaddle();
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>Vida perdida</strong><span>Toca para lanzar de nuevo</span>';
   }
 
-  function splitBrick(body, nx, ny) {
-    if (!body._brick || body._gen >= MAX_GEN) return;
-    if (engine.world.bodies.length >= MAX_BODIES) return;
-    const s = body._size || 8;
-    if (s < 4.5) return;
-
-    const gen = (body._gen || 0) + 1;
-    const color = body._color || body.render.fillStyle;
-    const half = s * 0.48;
-    const cx = body.position.x;
-    const cy = body.position.y;
-    const vx = body.velocity.x;
-    const vy = body.velocity.y;
-
-    Composite.remove(engine.world, body);
-    const idx = brickBodies.indexOf(body);
-    if (idx >= 0) brickBodies.splice(idx, 1);
-
-    const shards = [];
-    const offsets = [
-      [-0.28, -0.28], [0.28, -0.28],
-      [-0.28, 0.28], [0.28, 0.28],
-    ];
-    // 2 o 4 fragmentos según generación
-    const use = gen === 1 ? offsets : offsets.slice(0, 2);
-    for (const [ox, oy] of use) {
-      if (engine.world.bodies.length + shards.length >= MAX_BODIES) break;
-      const shard = Bodies.rectangle(cx + ox * s, cy + oy * s, half, half, stoneOptions(color, gen));
-      shard._brick = true;
-      shard._gen = gen;
-      shard._color = color;
-      shard._size = half;
-      Body.setVelocity(shard, {
-        x: vx + (ox * 4) + (Math.random() - 0.5) * 2,
-        y: vy + (oy * 3) - 1 + (Math.random() - 0.5),
-      });
-      Body.setAngularVelocity(shard, (Math.random() - 0.5) * 0.4);
-      shards.push(shard);
-    }
-    Composite.add(engine.world, shards);
-    brickBodies.push(...shards);
-  }
-
-  function relativeSpeed(a, b) {
-    const dx = a.velocity.x - b.velocity.x;
-    const dy = a.velocity.y - b.velocity.y;
-    return Math.hypot(dx, dy);
-  }
-
-  function hammerAt(x, y) {
-    const now = performance.now();
-    if (now - lastHammer < 80) return;
-    lastHammer = now;
-
-    const hit = Query.point(brickBodies, { x, y });
-    const radius = 42;
-    const nearby = brickBodies.filter((b) => {
-      if (!b._brick || b.isStatic) return false;
-      const d = Math.hypot(b.position.x - x, b.position.y - y);
-      return d < radius;
-    });
-
-    for (const b of nearby) {
-      const dx = b.position.x - x;
-      const dy = b.position.y - y;
-      const d = Math.max(8, Math.hypot(dx, dy));
-      const force = (1 - d / radius) * 0.08;
-      Body.applyForce(b, b.position, {
-        x: (dx / d) * force,
-        y: (dy / d) * force - 0.04,
-      });
-      Body.setAngularVelocity(b, Body.getAngularVelocity(b) + (Math.random() - 0.5) * 0.3);
-      if (Math.hypot(b.velocity.x, b.velocity.y) + force * 80 > HAMMER_SPEED * 0.35) {
-        splitBrick(b, dx / d, dy / d);
+  function hitBrick(br) {
+    if (!br.alive) return;
+    br.hp--;
+    if (br.hp <= 0) {
+      br.alive = false;
+      aliveCount--;
+      score += br.maxHp * 10;
+      grid[br.iy * cols + br.ix] = -1;
+      drawBrickToLayer(br);
+      if (aliveCount <= 0) {
+        won = true;
+        launched = false;
+        hint.classList.add('show');
+        hint.innerHTML = '<strong>¡Campo limpio!</strong><span>Reinicia para otra ronda</span>';
       }
+    } else {
+      score += 5;
+      drawBrickToLayer(br);
     }
-
-    // Si tocaste un ladrillo directo, partelo seguro
-    for (const b of hit) {
-      if (b._brick && !b.isStatic) splitBrick(b, 0, -1);
-    }
-    updateCount();
+    updateHud();
+    const sp = Math.hypot(ball.vx, ball.vy);
+    const boost = Math.min(9.6, sp * 1.0035);
+    const ang = Math.atan2(ball.vy, ball.vx);
+    ball.vx = Math.cos(ang) * boost;
+    ball.vy = Math.sin(ang) * boost;
+    ball.speed = boost;
   }
 
-  function reset() {
-    buildBricks();
-  }
+  function collideBricks() {
+    const ix0 = Math.floor((ball.x - ball.r - originX) / cellScreen) - 1;
+    const iy0 = Math.floor((ball.y - ball.r - originY) / cellScreen) - 1;
+    const ix1 = Math.floor((ball.x + ball.r - originX) / cellScreen) + 1;
+    const iy1 = Math.floor((ball.y + ball.r - originY) / cellScreen) + 1;
 
-  function setupEngine() {
-    const { w: W, h: H } = size();
-    engine = Engine.create({
-      gravity: { x: 0, y: 2.05 },
-      positionIterations: 8,
-      velocityIterations: 6,
-      enableSleeping: true,
-    });
-    // Menos “goma”: solver más firme
-    engine.world.gravity.scale = 0.001;
+    let hit = null;
+    let bounceX = false;
+    let bounceY = false;
 
-    render = Render.create({
-      canvas,
-      engine,
-      options: {
-        width: W,
-        height: H,
-        wireframes: false,
-        background: 'transparent',
-        pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-      },
-    });
-    Render.run(render);
-    runner = Runner.create();
-    Runner.run(runner, engine);
+    for (let iy = iy0; iy <= iy1; iy++) {
+      if (iy < 0 || iy >= rows) continue;
+      for (let ix = ix0; ix <= ix1; ix++) {
+        if (ix < 0 || ix >= cols) continue;
+        const id = grid[iy * cols + ix];
+        if (id < 0) continue;
+        const br = bricks[id];
+        if (!br.alive) continue;
+        const nx = Math.max(br.x, Math.min(ball.x, br.x + br.w));
+        const ny = Math.max(br.y, Math.min(ball.y, br.y + br.h));
+        const dx = ball.x - nx;
+        const dy = ball.y - ny;
+        if (dx * dx + dy * dy > ball.r * ball.r) continue;
 
-    const mouse = Mouse.create(canvas);
-    mouse.pixelRatio = render.options.pixelRatio;
-    mouseConstraint = MouseConstraint.create(engine, {
-      mouse,
-      constraint: {
-        stiffness: 0.85,
-        damping: 0.1,
-        render: { visible: false },
-      },
-    });
-    Composite.add(engine.world, mouseConstraint);
-    render.mouse = mouse;
-
-    Events.on(engine, 'collisionStart', (ev) => {
-      if (!shattered || breaking) return;
-      breaking = true;
-      const toBreak = [];
-      for (const pair of ev.pairs) {
-        const a = pair.bodyA;
-        const b = pair.bodyB;
-        const speed = relativeSpeed(a, b);
-        // También velocidad absoluta del más rápido
-        const absA = Math.hypot(a.velocity.x, a.velocity.y);
-        const absB = Math.hypot(b.velocity.x, b.velocity.y);
-        const impact = Math.max(speed, absA * 0.7, absB * 0.7);
-        if (impact < BREAK_SPEED) continue;
-        if (a._brick && a._gen < MAX_GEN) toBreak.push(a);
-        if (b._brick && b._gen < MAX_GEN) toBreak.push(b);
+        hit = br;
+        const oL = (ball.x + ball.r) - br.x;
+        const oR = (br.x + br.w) - (ball.x - ball.r);
+        const oT = (ball.y + ball.r) - br.y;
+        const oB = (br.y + br.h) - (ball.y - ball.r);
+        if (Math.min(oL, oR) < Math.min(oT, oB)) bounceX = true;
+        else bounceY = true;
+        break;
       }
-      // Limitar roturas por frame (rendimiento móvil)
-      const uniq = [...new Set(toBreak)].slice(0, 18);
-      for (const body of uniq) splitBrick(body, 0, 0);
-      if (uniq.length) updateCount();
-      breaking = false;
-    });
+      if (hit) break;
+    }
 
-    const onPointer = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const pt = e.touches ? e.touches[0] : e;
-      const x = (pt.clientX - rect.left) * (canvas.width / rect.width) / (render.options.pixelRatio || 1);
-      const y = (pt.clientY - rect.top) * (canvas.height / rect.height) / (render.options.pixelRatio || 1);
-      // Corregir: Matter usa CSS pixels del canvas render
-      const mx = (pt.clientX - rect.left) * (render.options.width / rect.width);
-      const my = (pt.clientY - rect.top) * (render.options.height / rect.height);
+    if (!hit) return;
+    if (bounceX) ball.vx *= -1;
+    if (bounceY) ball.vy *= -1;
+    ball.x += Math.sign(ball.vx || 1) * 0.6;
+    ball.y += Math.sign(ball.vy || 1) * 0.6;
+    hitBrick(hit);
+  }
 
-      if (!shattered) {
-        e.preventDefault();
-        shatter();
+  function update(dt) {
+    if (!running) return;
+
+    if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
+    paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
+
+    if (!launched) {
+      stickBallToPaddle();
+      return;
+    }
+    if (gameOver || won) return;
+
+    const steps = 3;
+    for (let s = 0; s < steps; s++) {
+      ball.x += (ball.vx * dt * 60) / steps;
+      ball.y += (ball.vy * dt * 60) / steps;
+
+      if (ball.x - ball.r < 0) { ball.x = ball.r; ball.vx = Math.abs(ball.vx); }
+      if (ball.x + ball.r > W) { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx); }
+      if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy = Math.abs(ball.vy); }
+
+      if (
+        ball.vy > 0 &&
+        ball.y + ball.r >= paddle.y &&
+        ball.y - ball.r <= paddle.y + paddle.h &&
+        ball.x >= paddle.x - 2 &&
+        ball.x <= paddle.x + paddle.w + 2
+      ) {
+        ball.y = paddle.y - ball.r - 0.5;
+        const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+        const ang = -Math.PI / 2 + Math.max(-1, Math.min(1, hit)) * 1.05;
+        const sp = Math.max(ball.speed, Math.hypot(ball.vx, ball.vy));
+        ball.vx = Math.cos(ang) * sp;
+        ball.vy = Math.sin(ang) * sp;
+      }
+
+      collideBricks();
+
+      if (ball.y - ball.r > H + 4) {
+        loseLife();
         return;
       }
-      hammerAt(mx, my);
-    };
-    canvas.addEventListener('pointerdown', onPointer, { passive: false });
-  }
-
-  function onResize() {
-    if (!render) return;
-    const { w: W, h: H } = size();
-    render.canvas.width = W * render.options.pixelRatio;
-    render.canvas.height = H * render.options.pixelRatio;
-    render.canvas.style.width = W + 'px';
-    render.canvas.style.height = H + 'px';
-    render.options.width = W;
-    render.options.height = H;
-    render.bounds.max.x = W;
-    render.bounds.max.y = H;
-    if (!shattered) reset();
-    else {
-      Composite.remove(engine.world, walls);
-      addBounds(W, H);
     }
   }
 
-  shatterBtn.addEventListener('click', (e) => { e.stopPropagation(); shatter(); });
-  resetBtn.addEventListener('click', (e) => { e.stopPropagation(); reset(); });
+  function drawPaddle() {
+    const { x, y, w, h, r } = paddle;
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, '#d5dae2');
+    g.addColorStop(0.45, '#8e96a3');
+    g.addColorStop(1, '#3e4450');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.32)';
+    ctx.fillRect(x + 10, y + 2, w - 20, 3);
+  }
+
+  function drawBall() {
+    const g = ctx.createRadialGradient(
+      ball.x - ball.r * 0.35, ball.y - ball.r * 0.4, ball.r * 0.12,
+      ball.x, ball.y, ball.r
+    );
+    g.addColorStop(0, '#f5f7f9');
+    g.addColorStop(0.4, '#a0a8b2');
+    g.addColorStop(1, '#2f343c');
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
+    drawPaddle();
+    drawBall();
+  }
+
+  function frame(ts) {
+    const dt = Math.min(0.033, (ts - lastTs) / 1000 || 0.016);
+    lastTs = ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  function pointerPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const pt = e.touches && e.touches[0] ? e.touches[0] : e;
+    return {
+      x: (pt.clientX - rect.left) * (W / rect.width),
+      y: (pt.clientY - rect.top) * (H / rect.height),
+    };
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    pointerX = pointerPos(e).x;
+    if (!launched && !gameOver && !won) launch();
+  }
+  function onMove(e) {
+    e.preventDefault();
+    pointerX = pointerPos(e).x;
+  }
+
+  canvas.addEventListener('pointerdown', onDown, { passive: false });
+  canvas.addEventListener('pointermove', onMove, { passive: false });
+  canvas.addEventListener('touchstart', onDown, { passive: false });
+  canvas.addEventListener('touchmove', onMove, { passive: false });
+
+  resetBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    buildLevel();
+  });
 
   window.addEventListener('resize', () => {
     clearTimeout(window.__rz);
-    window.__rz = setTimeout(onResize, 120);
+    window.__rz = setTimeout(() => buildLevel(), 150);
   });
 
   (async function init() {
     try {
       await loadImage();
-      setupEngine();
-      reset();
+      buildLevel();
       loading.classList.add('hide');
+      requestAnimationFrame(frame);
     } catch (err) {
       loading.textContent = 'No pude cargar la imagen.';
       console.error(err);
