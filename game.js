@@ -1,4 +1,4 @@
-/* Mech Arkanoid — piernas/colapso, bombas, HP suave, polvo, corazones */
+/* Mech Arkanoid — ladrillos con soporte + gravedad realista, bombas, polvo */
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
@@ -14,8 +14,9 @@
   const MIN_BRICKS = 7000;
   const MAX_BRICKS = 12000;
   const START_LIVES = 3;
-  const BOMB_EVERY = 4.2; // segundos
+  const BOMB_EVERY = 4.2;
   const EXPLODE_R = 78;
+  const G = 0.42; // gravedad pesada
 
   let W = 0, H = 0, dpr = 1;
   let imgData = null, imgW = 0, imgH = 0;
@@ -24,6 +25,7 @@
   let cols = 0, rows = 0, cell = 6;
   let brickPx = 8, cellScreen = 8;
   let originX = 0, originY = 0;
+  let groundY = 0;
   let brickLayer = null;
   let paddle, ball;
   let running = false, launched = false, gameOver = false, won = false;
@@ -33,9 +35,7 @@
   let particles = [];
   let bombs = [];
   let bombTimer = 0;
-  let collapsed = false;
-  let legAlive = 0;
-  let minIy = 0, maxIy = 0, legIyStart = 0;
+  let structureCount = 0; // ladrillos aún en la estructura (no caídos)
 
   function size() {
     return {
@@ -120,20 +120,15 @@
     const lctx = brickLayer.getContext('2d');
     const pad = 0.35;
     lctx.clearRect(br.x - 0.5, br.y - 0.5, br.w + 1, br.h + 1);
-    if (!br.alive || br.falling) return;
+    // Solo estructura apoyada se dibuja en la capa estática
+    if (!br.alive || br.falling || br.settled) return;
     const t = br.hp / br.maxHp;
     lctx.fillStyle = shade(br.color, 0.52 + 0.48 * t);
     lctx.fillRect(br.x + pad, br.y + pad, br.w - pad * 2, br.h - pad * 2);
     if (br.maxHp >= 2) {
-      lctx.strokeStyle = 'rgba(255,196,70,0.4)';
+      lctx.strokeStyle = 'rgba(255,196,70,0.35)';
       lctx.lineWidth = 1;
       lctx.strokeRect(br.x + 0.8, br.y + 0.8, br.w - 1.6, br.h - 1.6);
-    } else if (br.hp < br.maxHp) {
-      lctx.strokeStyle = 'rgba(0,0,0,0.5)';
-      lctx.beginPath();
-      lctx.moveTo(br.x + 1, br.y + br.h * 0.35);
-      lctx.lineTo(br.x + br.w - 1, br.y + br.h * 0.7);
-      lctx.stroke();
     }
   }
 
@@ -147,7 +142,7 @@
   }
 
   function updateHud() {
-    countEl.textContent = `${aliveCount} ladrillos`;
+    countEl.textContent = `${structureCount} ladrillos`;
     scoreEl.textContent = `${score} pts`;
     renderLives();
   }
@@ -157,6 +152,83 @@
     ball.y = paddle.y - ball.r - 2;
     ball.vx = 0;
     ball.vy = 0;
+  }
+
+  /** ¿Quién sigue conectado al suelo? Lo demás se cae. */
+  function recomputeSupport() {
+    const n = bricks.length;
+    const supported = new Uint8Array(n);
+    const q = [];
+
+    for (let i = 0; i < n; i++) {
+      const br = bricks[i];
+      if (!br.alive || br.falling || br.settled) continue;
+      // Apoyado en el suelo (pies del mech)
+      if (br.y + br.h >= groundY - 2) {
+        supported[i] = 1;
+        q.push(i);
+      }
+    }
+
+    // Propagar soporte por vecinos (arriba/abajo/izq/der)
+    while (q.length) {
+      const i = q.pop();
+      const br = bricks[i];
+      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (let d = 0; d < 4; d++) {
+        const nix = br.ix + dirs[d][0];
+        const niy = br.iy + dirs[d][1];
+        if (nix < 0 || niy < 0 || nix >= cols || niy >= rows) continue;
+        const id = grid[niy * cols + nix];
+        if (id < 0 || supported[id]) continue;
+        const nb = bricks[id];
+        if (!nb.alive || nb.falling || nb.settled) continue;
+        supported[id] = 1;
+        q.push(id);
+      }
+    }
+
+    let detached = 0;
+    for (let i = 0; i < n; i++) {
+      const br = bricks[i];
+      if (!br.alive || br.falling || br.settled) continue;
+      if (supported[i]) continue;
+      // Sin camino al suelo → gravedad
+      if (grid[br.iy * cols + br.ix] === i) grid[br.iy * cols + br.ix] = -1;
+      br.falling = true;
+      br.vx = (Math.random() - 0.5) * 0.55;
+      br.vy = 0.15 + Math.random() * 0.35;
+      drawBrickToLayer(br);
+      detached++;
+    }
+
+    // Contar estructura restante
+    structureCount = 0;
+    for (let i = 0; i < n; i++) {
+      const br = bricks[i];
+      if (br.alive && !br.falling && !br.settled) structureCount++;
+    }
+    if (detached > 40) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Se derrumba!</strong><span>Sin soporte, cae al suelo</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => {
+        if (launched && !gameOver) hint.classList.remove('show');
+      }, 1400);
+    }
+    updateHud();
+    maybeWin();
+  }
+
+  function maybeWin() {
+    if (won || gameOver) return;
+    if (structureCount <= 0) {
+      won = true;
+      launched = false;
+      bombs = [];
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
+    }
   }
 
   function buildLevel() {
@@ -178,16 +250,13 @@
     bricks = [];
     grid = new Int32Array(cols * rows);
     grid.fill(-1);
-    minIy = rows; maxIy = 0;
+    groundY = 0;
 
     for (let iy = 0; iy < rows; iy++) {
       for (let ix = 0; ix < cols; ix++) {
         if (bricks.length >= MAX_BRICKS) break;
         const c = avgCell(ix, iy, cell);
         if (!c) continue;
-        minIy = Math.min(minIy, iy);
-        maxIy = Math.max(maxIy, iy);
-        // Más blandos: casi todos 1 golpe; ~10% con 2
         const maxHp = Math.random() < 0.1 ? 2 : 1;
         const br = {
           ix, iy,
@@ -200,22 +269,17 @@
           maxHp,
           alive: true,
           falling: false,
-          isLeg: false,
+          settled: false,
           vx: 0,
           vy: 0,
         };
+        groundY = Math.max(groundY, br.y + br.h);
         grid[iy * cols + ix] = bricks.length;
         bricks.push(br);
       }
     }
-
-    // Piernas = ~38% inferior de la silueta
-    legIyStart = minIy + Math.floor((maxIy - minIy) * 0.62);
-    legAlive = 0;
-    for (const br of bricks) {
-      br.isLeg = br.iy >= legIyStart;
-      if (br.isLeg) legAlive++;
-    }
+    // Suelo justo bajo los pies
+    groundY += 0.5;
 
     brickLayer = document.createElement('canvas');
     brickLayer.width = Math.floor(W * dpr);
@@ -225,11 +289,11 @@
     lctx.clearRect(0, 0, W, H);
     for (const br of bricks) drawBrickToLayer(br);
 
+    structureCount = bricks.length;
     aliveCount = bricks.length;
     particles = [];
     bombs = [];
     bombTimer = 2.5;
-    collapsed = false;
     score = 0;
     lives = START_LIVES;
     gameOver = false;
@@ -250,7 +314,7 @@
     stickBallToPaddle();
 
     hint.classList.add('show');
-    hint.innerHTML = '<strong>Desliza la paleta</strong><span>Toca para lanzar · rebota bombas para explotar</span>';
+    hint.innerHTML = '<strong>Desliza la paleta</strong><span>Sin soporte abajo, los ladrillos caen</span>';
     running = true;
   }
 
@@ -314,48 +378,21 @@
   }
 
   function destroyBrick(br, pts) {
-    if (!br.alive) return;
+    if (!br.alive || br.settled) return;
+    const wasStructure = !br.falling;
     br.alive = false;
     br.falling = false;
-    aliveCount = Math.max(0, aliveCount - 1);
+    if (wasStructure && grid[br.iy * cols + br.ix] >= 0) {
+      grid[br.iy * cols + br.ix] = -1;
+    }
     score += pts;
-    if (!br.falling && grid[br.iy * cols + br.ix] >= 0) {
-      grid[br.iy * cols + br.ix] = -1;
-    }
     drawBrickToLayer(br);
-    if (br.isLeg && !collapsed) {
-      legAlive = Math.max(0, legAlive - 1);
-      if (legAlive <= 0) triggerCollapse();
-    }
-    if (aliveCount <= 0 && !won) {
-      won = true;
-      launched = false;
-      bombs = [];
-      hint.classList.add('show');
-      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
-    }
-  }
-
-  function triggerCollapse() {
-    if (collapsed) return;
-    collapsed = true;
-    hint.classList.add('show');
-    hint.innerHTML = '<strong>¡Piernas fuera!</strong><span>El mech se derrumba</span>';
-    setTimeout(() => { if (collapsed && launched && !gameOver) hint.classList.remove('show'); }, 1600);
-
-    for (const br of bricks) {
-      if (!br.alive || br.isLeg) continue;
-      // Quitar del grid y caer
-      grid[br.iy * cols + br.ix] = -1;
-      br.falling = true;
-      br.vx = (Math.random() - 0.5) * 1.2;
-      br.vy = Math.random() * 0.5;
-      drawBrickToLayer(br); // limpia del layer estático
-    }
+    if (wasStructure) recomputeSupport();
+    else updateHud();
   }
 
   function hitBrick(br) {
-    if (!br.alive || br.falling) return;
+    if (!br.alive || br.falling || br.settled) return;
     spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, br.hp <= 1 ? 14 : 8);
     br.hp--;
     if (br.hp <= 0) {
@@ -363,8 +400,8 @@
     } else {
       score += 5;
       drawBrickToLayer(br);
+      updateHud();
     }
-    updateHud();
     const sp = Math.hypot(ball.vx, ball.vy);
     const boost = Math.min(9.6, sp * 1.0035);
     const ang = Math.atan2(ball.vy, ball.vx);
@@ -377,45 +414,35 @@
     const r2 = EXPLODE_R * EXPLODE_R;
     spawnDust(x, y, 'rgb(255,120,40)', 40);
     spawnDust(x, y, 'rgb(80,80,80)', 24);
-    let n = 0;
+    const hitList = [];
     for (const br of bricks) {
-      if (!br.alive) continue;
+      if (!br.alive || br.settled) continue;
       const cx = br.x + br.w / 2;
       const cy = br.y + br.h / 2;
       const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
-      if (d2 <= r2) {
-        spawnDust(cx, cy, br.color, 6);
-        destroyBrick(br, 15);
-        n++;
-      }
+      if (d2 <= r2) hitList.push(br);
     }
-    // Empuje a ladrillos que ya caen
-    for (const br of bricks) {
-      if (!br.alive || !br.falling) continue;
-      const cx = br.x + br.w / 2;
-      const cy = br.y + br.h / 2;
-      const dx = cx - x, dy = cy - y;
-      const d = Math.hypot(dx, dy) || 1;
-      if (d < EXPLODE_R * 1.4) {
-        br.vx += (dx / d) * 3;
-        br.vy += (dy / d) * 2 - 1;
-      }
+    // Destruir y luego un solo recompute
+    for (const br of hitList) {
+      spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, 5);
+      const wasStructure = !br.falling;
+      br.alive = false;
+      br.falling = false;
+      if (wasStructure && grid[br.iy * cols + br.ix] >= 0) grid[br.iy * cols + br.ix] = -1;
+      score += 15;
+      drawBrickToLayer(br);
     }
-    updateHud();
-    return n;
+    recomputeSupport();
   }
 
   function spawnBomb() {
     if (gameOver || won || !launched) return;
-    // Desde torso / brazo (no piernas), preferir mitad izquierda (bola demolicion)
     const candidates = [];
     for (const br of bricks) {
-      if (!br.alive || br.falling || br.isLeg) continue;
-      if (br.iy > legIyStart - 4) continue;
+      if (!br.alive || br.falling || br.settled) continue;
       candidates.push(br);
     }
     if (!candidates.length) return;
-    // sesgo a la izquierda de la silueta
     candidates.sort((a, b) => a.x - b.x);
     const pickPool = candidates.slice(0, Math.max(8, (candidates.length * 0.35) | 0));
     const src = pickPool[(Math.random() * pickPool.length) | 0];
@@ -447,7 +474,7 @@
         const id = grid[iy * cols + ix];
         if (id < 0) continue;
         const br = bricks[id];
-        if (!br.alive || br.falling) continue;
+        if (!br.alive || br.falling || br.settled) continue;
         const nx = Math.max(br.x, Math.min(ball.x, br.x + br.w));
         const ny = Math.max(br.y, Math.min(ball.y, br.y + br.h));
         const dx = ball.x - nx;
@@ -486,7 +513,6 @@
       if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx); }
       if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx); }
 
-      // Rebote con paleta
       if (
         b.vy > 0 &&
         b.y + b.r >= paddle.y &&
@@ -503,7 +529,6 @@
         b.reflected = true;
       }
 
-      // Bomba rebotada golpea ladrillo → explota
       if (b.reflected) {
         const ix0 = Math.floor((b.x - b.r - originX) / cellScreen) - 1;
         const iy0 = Math.floor((b.y - b.r - originY) / cellScreen) - 1;
@@ -517,22 +542,7 @@
             const id = grid[iy * cols + ix];
             if (id < 0) continue;
             const br = bricks[id];
-            if (!br.alive || br.falling) continue;
-            const nx = Math.max(br.x, Math.min(b.x, br.x + br.w));
-            const ny = Math.max(br.y, Math.min(b.y, br.y + br.h));
-            const dx = b.x - nx, dy = b.y - ny;
-            if (dx * dx + dy * dy <= b.r * b.r) {
-              explodeAt(b.x, b.y);
-              b.alive = false;
-              struck = true;
-              break;
-            }
-          }
-        }
-        // También puede explotar al tocar un ladrillo que cae
-        if (!struck) {
-          for (const br of bricks) {
-            if (!br.alive || !br.falling) continue;
+            if (!br.alive || br.falling || br.settled) continue;
             const nx = Math.max(br.x, Math.min(b.x, br.x + br.w));
             const ny = Math.max(br.y, Math.min(b.y, br.y + br.h));
             const dx = b.x - nx, dy = b.y - ny;
@@ -548,7 +558,6 @@
 
       if (!b.alive) { bombs.splice(i, 1); continue; }
 
-      // Se escapó por abajo sin rebote → −¼ vida
       if (b.y - b.r > H + 6) {
         if (!b.reflected) loseQuarterLife();
         bombs.splice(i, 1);
@@ -557,24 +566,29 @@
   }
 
   function updateFalling(dt) {
+    const step = dt * 60;
     for (const br of bricks) {
-      if (!br.alive || !br.falling) continue;
-      br.vy += 0.35 * dt * 60;
-      br.x += br.vx * dt * 60;
-      br.y += br.vy * dt * 60;
-      br.vx *= 0.995;
-      if (br.y > H + 30) {
-        br.alive = false;
-        aliveCount = Math.max(0, aliveCount - 1);
+      if (!br.alive || !br.falling || br.settled) continue;
+      br.vy += G * step; // pesados
+      br.x += br.vx * step;
+      br.y += br.vy * step;
+      br.vx *= 0.998;
+
+      // Suelo bajo los pies del mech
+      if (br.y + br.h >= groundY) {
+        br.y = groundY - br.h;
+        br.vx *= 0.4;
+        br.vy = 0;
+        br.falling = false;
+        br.settled = true;
+        spawnDust(br.x + br.w / 2, br.y + br.h, br.color, 3);
+        continue;
       }
-    }
-    if (collapsed && aliveCount <= 0 && !won && !gameOver) {
-      won = true;
-      launched = false;
-      bombs = [];
-      hint.classList.add('show');
-      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
-      updateHud();
+
+      if (br.y > H + 40) {
+        br.alive = false;
+        br.falling = false;
+      }
     }
   }
 
@@ -642,6 +656,15 @@
     }
   }
 
+  function drawGround() {
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY + 0.5);
+    ctx.lineTo(W, groundY + 0.5);
+    ctx.stroke();
+  }
+
   function drawPaddle() {
     const { x, y, w, h, r } = paddle;
     const g = ctx.createLinearGradient(x, y, x, y + h);
@@ -698,7 +721,6 @@
       ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
       ctx.fillStyle = g;
       ctx.fill();
-      // mecha
       ctx.strokeStyle = b.reflected ? '#ffb703' : '#c1121f';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -712,10 +734,11 @@
     }
   }
 
-  function drawFallingBricks() {
+  function drawLooseBricks() {
     for (const br of bricks) {
-      if (!br.alive || !br.falling) continue;
-      ctx.fillStyle = br.color;
+      if (!br.alive) continue;
+      if (!br.falling && !br.settled) continue;
+      ctx.fillStyle = br.settled ? shade(br.color, 0.75) : br.color;
       ctx.fillRect(br.x, br.y, br.w, br.h);
     }
   }
@@ -732,8 +755,9 @@
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
+    drawGround();
     if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
-    drawFallingBricks();
+    drawLooseBricks();
     drawParticles();
     drawBombs();
     drawPaddle();
