@@ -10,7 +10,7 @@
   const shatterBtn = document.getElementById('shatter');
   const resetBtn = document.getElementById('reset');
 
-  const IMG_SRC = 'mech.jpeg';
+  const IMG_SRC = 'mech.png';
   const MIN_BRICKS = 7000;
   const MAX_BRICKS = 12000;
   const MAX_BODIES = 16000;
@@ -35,10 +35,8 @@
   }
 
   function isBackground(r, g, b, a) {
+    // Cut-out PNG: transparent (and near-transparent) is empty space
     if (a < 28) return true;
-    if (r > 200 && g > 200 && b > 200) return true;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    if (max - min < 18 && r > 160) return true;
     return false;
   }
 
