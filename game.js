@@ -12,7 +12,7 @@
   const resetBtn = document.getElementById('reset');
 
   const IMG_SRC = 'mech.jpeg';
-  const MAX_BRICKS = 9000;
+  const MAX_BRICKS = 10000;
   const BG_THRESH = 245; // skip near-white / light grey studio bg
 
   let engine, runner, render;
@@ -116,21 +116,28 @@
     const originX = (W - drawW) / 2;
     const originY = (H - drawH) / 2 + 8;
 
-    const cols = Math.ceil(imgW / cell);
-    const rows = Math.ceil(imgH / cell);
-    let step = 1;
-    const approx = cols * rows;
-    if (approx > MAX_BRICKS) step = Math.ceil(Math.sqrt(approx / MAX_BRICKS));
+    // Grow cell a bit if needed so we stay near the target count (no stride skip).
+    let useCell = cell;
+    while (true) {
+      const cols0 = Math.ceil(imgW / useCell);
+      const rows0 = Math.ceil(imgH / useCell);
+      if (cols0 * rows0 <= MAX_BRICKS * 1.35) break; // fg is less than full grid
+      useCell += 1;
+      if (useCell > cell + 12) break;
+    }
 
-    const brickPx = Math.max(4, cell * fit * step * 0.98);
+    const cols = Math.ceil(imgW / useCell);
+    const rows = Math.ceil(imgH / useCell);
+    const brickPx = Math.max(3, useCell * fit * 0.98);
     const list = [];
 
-    for (let iy = 0; iy < rows; iy += step) {
-      for (let ix = 0; ix < cols; ix += step) {
-        const c = avgCell(imgData, imgW, ix, iy, cell * step, step, step);
+    for (let iy = 0; iy < rows; iy++) {
+      for (let ix = 0; ix < cols; ix++) {
+        if (list.length >= MAX_BRICKS) break;
+        const c = avgCell(imgData, imgW, ix, iy, useCell, 1, 1);
         if (!c) continue;
-        const cx = originX + (ix * cell + (cell * step) / 2) * fit;
-        const cy = originY + (iy * cell + (cell * step) / 2) * fit;
+        const cx = originX + (ix * useCell + useCell / 2) * fit;
+        const cy = originY + (iy * useCell + useCell / 2) * fit;
         const color = `rgb(${c.r},${c.g},${c.b})`;
         const body = Bodies.rectangle(cx, cy, brickPx, brickPx, {
           isStatic: true,
