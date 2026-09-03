@@ -6,7 +6,7 @@
   const loading = document.getElementById('loading');
   const hint = document.getElementById('hint');
   const countEl = document.getElementById('count');
-  const scoreEl = document.getElementById('score');
+  const scoreEl = document.getElementById('scoreVal');
   const livesEl = document.getElementById('lives');
   const resetBtn = document.getElementById('reset');
 
@@ -35,6 +35,9 @@
   let particles = [];
   let paddleImg = null;
   let paddleTrail = []; // estela azul
+  let bgImg = null;
+  let bgT = 0;
+  let bgDust = [];
   let bombs = [];
   let bombTimer = 0;
   let structureCount = 0; // ladrillos aún en la estructura (no caídos)
@@ -147,7 +150,7 @@
 
   function updateHud() {
     countEl.textContent = `${structureCount} ladrillos`;
-    scoreEl.textContent = `${score} pts`;
+    scoreEl.textContent = `$${score}`;
     renderLives();
   }
 
@@ -330,6 +333,18 @@
     outro = null;
     outroT = 0;
     window.__outroDust = false;
+    bgT = 0;
+    bgDust = [];
+    for (let i = 0; i < 28; i++) {
+      bgDust.push({
+        x: Math.random() * W,
+        y: Math.random() * H * 0.55,
+        r: 0.6 + Math.random() * 1.8,
+        vx: 0.15 + Math.random() * 0.35,
+        vy: (Math.random() - 0.5) * 0.08,
+        a: 0.12 + Math.random() * 0.22,
+      });
+    }
     launched = false;
     updateHud();
 
@@ -696,6 +711,7 @@
 
   function update(dt) {
     if (!running) return;
+    updateBg(dt);
 
     // Cámara lenta al derrumbe final
     let simDt = dt;
@@ -823,7 +839,7 @@
   }
 
   function drawGround() {
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeStyle = 'rgba(255,200,120,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, groundY + 0.5);
@@ -943,8 +959,54 @@
     }
   }
 
+  function drawBackground() {
+    if (!bgImg) {
+      ctx.fillStyle = '#1a0f08';
+      ctx.fillRect(0, 0, W, H);
+      return;
+    }
+    const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
+    const scale = Math.max(W / iw, H / ih) * 1.08;
+    const dw = iw * scale, dh = ih * scale;
+    const drift = (Math.sin(bgT * 0.07) * 0.5 + 0.5) * (dw - W) * 0.35
+                + Math.sin(bgT * 0.023) * 8;
+    const dx = -drift - (dw - W) * 0.15;
+    const dy = -(dh - H) * 0.35;
+    ctx.drawImage(bgImg, dx, dy, dw, dh);
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    const drift2 = (bgT * 6) % Math.max(1, dw);
+    ctx.drawImage(bgImg, dx - drift2 * 0.15, dy - 10, dw, dh);
+    ctx.globalAlpha = 0.08;
+    ctx.drawImage(bgImg, dx + 20 + Math.sin(bgT * 0.05) * 12, dy + 6, dw, dh);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(10, 6, 4, 0.28)';
+    ctx.fillRect(0, 0, W, H);
+    for (const p of bgDust) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 170, 90, ${p.a})`;
+      ctx.fill();
+    }
+    const flicker = 0.04 + Math.sin(bgT * 3.1) * 0.02 + Math.sin(bgT * 7.7) * 0.015;
+    ctx.fillStyle = `rgba(255, 140, 40, ${flicker})`;
+    ctx.fillRect(0, H * 0.55, W, H * 0.2);
+  }
+
+  function updateBg(dt) {
+    bgT += dt;
+    for (const p of bgDust) {
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60 + Math.sin(bgT * 2 + p.x * 0.01) * 0.05;
+      if (p.x > W + 10) p.x = -10;
+      if (p.y < 0) p.y = H * 0.5;
+      if (p.y > H * 0.6) p.y = Math.random() * H * 0.4;
+    }
+  }
+
   function draw() {
     ctx.clearRect(0, 0, W, H);
+    drawBackground();
     drawGround();
     if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
     drawLooseBricks();
@@ -996,6 +1058,15 @@
     window.__rz = setTimeout(() => buildLevel(), 150);
   });
 
+  function loadBg() {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => { bgImg = img; resolve(); };
+      img.onerror = reject;
+      img.src = 'bg.jpg';
+    });
+  }
+
   function loadPaddle() {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -1007,7 +1078,7 @@
 
   (async function init() {
     try {
-      await Promise.all([loadImage(), loadPaddle()]);
+      await Promise.all([loadImage(), loadPaddle(), loadBg()]);
       buildLevel();
       loading.classList.add('hide');
       requestAnimationFrame(frame);

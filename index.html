@@ -22,7 +22,7 @@
       display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
       padding: 10px 12px;
       padding-top: max(10px, env(safe-area-inset-top));
-      background: rgba(0,0,0,.6);
+      background: rgba(0,0,0,.55);
       backdrop-filter: blur(8px);
       z-index: 2;
     }
@@ -39,18 +39,35 @@
       flex: 1 1 auto;
       position: relative;
       overflow: hidden;
-      background: radial-gradient(ellipse at 50% 20%, #22222c 0%, #0a0a0e 65%);
+      background: #1a0f08;
     }
     canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-    #lives {
+    #topRight {
       position: absolute;
       top: max(10px, env(safe-area-inset-top));
       right: 12px;
       z-index: 4;
       display: flex;
+      flex-direction: column;
+      align-items: flex-end;
       gap: 6px;
       pointer-events: none;
-      filter: drop-shadow(0 1px 3px rgba(0,0,0,.65));
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,.75));
+    }
+    #score {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 16px;
+      font-weight: 700;
+      color: #b8f5c2;
+      letter-spacing: 0.02em;
+      text-shadow: 0 1px 4px rgba(0,0,0,.8);
+    }
+    #score .bills { font-size: 18px; line-height: 1; }
+    #lives {
+      display: flex;
+      gap: 6px;
     }
     .heart-wrap {
       width: 22px; height: 20px;
@@ -83,7 +100,7 @@
     #loading {
       position: absolute; inset: 0;
       display: flex; align-items: center; justify-content: center;
-      background: #0a0a0e; z-index: 3; font-size: 15px;
+      background: #1a0f08; z-index: 3; font-size: 15px;
     }
     #loading.hide { display: none; }
   </style>
@@ -92,12 +109,14 @@
   <div id="wrap">
     <div id="hud">
       <h1>Mech Arkanoid</h1>
-      <span class="meta" id="score">0</span>
       <span class="meta" id="count">—</span>
       <button type="button" class="secondary" id="reset">Reiniciar</button>
     </div>
     <div id="stage">
-      <div id="lives" aria-label="Vidas"></div>
+      <div id="topRight">
+        <div id="score"><span class="bills" aria-hidden="true">💵</span><span id="scoreVal">$0</span></div>
+        <div id="lives" aria-label="Vidas"></div>
+      </div>
       <div id="loading">Armando el campo…</div>
       <div id="hint"><strong>Desliza la paleta</strong><span>Toca para lanzar la bola</span></div>
       <canvas id="c"></canvas>
