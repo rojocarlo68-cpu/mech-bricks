@@ -45,6 +45,26 @@
       background: radial-gradient(ellipse at 50% 20%, #22222c 0%, #0a0a0e 65%);
     }
     canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    #lives {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      right: 12px;
+      z-index: 4;
+      display: flex;
+      gap: 4px;
+      pointer-events: none;
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,.65));
+      font-size: 22px;
+      line-height: 1;
+      color: #4a0a5c;
+    }
+    #lives .heart {
+      color: #4a0a5c;
+      text-shadow: 0 0 1px #2a0536;
+    }
+    #lives .heart.empty {
+      opacity: 0.22;
+    }
     #hint {
       position: absolute; left: 50%; top: 55%;
       transform: translate(-50%, -50%);
@@ -68,12 +88,12 @@
   <div id="wrap">
     <div id="hud">
       <h1>Mech Arkanoid</h1>
-      <span class="meta" id="lives">Vidas 3</span>
       <span class="meta" id="score">0</span>
       <span class="meta" id="count">—</span>
       <button type="button" class="secondary" id="reset">Reiniciar</button>
     </div>
     <div id="stage">
+      <div id="lives" aria-label="Vidas"></div>
       <div id="loading">Armando el campo…</div>
       <div id="hint"><strong>Desliza la paleta</strong><span>Toca para lanzar la bola</span></div>
       <canvas id="c"></canvas>

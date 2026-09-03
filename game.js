@@ -1,4 +1,4 @@
-/* Mech Arkanoid — silueta del mech, paleta genérica, bola de metal, HP 2–3 */
+/* Mech Arkanoid — bola grande, HP 1–2, polvo, corazones */
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
@@ -28,6 +28,7 @@
   let score = 0, lives = START_LIVES, aliveCount = 0;
   let pointerX = null;
   let lastTs = 0;
+  let particles = [];
 
   function size() {
     return {
@@ -116,7 +117,7 @@
     const t = br.hp / br.maxHp;
     lctx.fillStyle = shade(br.color, 0.52 + 0.48 * t);
     lctx.fillRect(br.x + pad, br.y + pad, br.w - pad * 2, br.h - pad * 2);
-    if (br.maxHp >= 3) {
+    if (br.maxHp >= 2) {
       lctx.strokeStyle = 'rgba(255,196,70,0.4)';
       lctx.lineWidth = 1;
       lctx.strokeRect(br.x + 0.8, br.y + 0.8, br.w - 1.6, br.h - 1.6);
@@ -129,10 +130,18 @@
     }
   }
 
+  function renderLives() {
+    // Corazones púrpura oscuro, esquina superior derecha
+    livesEl.innerHTML = Array.from({ length: START_LIVES }, (_, i) => {
+      const on = i < lives;
+      return `<span class="heart${on ? '' : ' empty'}" aria-hidden="true">♥</span>`;
+    }).join('');
+  }
+
   function updateHud() {
     countEl.textContent = `${aliveCount} ladrillos`;
     scoreEl.textContent = `${score} pts`;
-    livesEl.textContent = `Vidas ${lives}`;
+    renderLives();
   }
 
   function stickBallToPaddle() {
@@ -167,7 +176,7 @@
         if (bricks.length >= MAX_BRICKS) break;
         const c = avgCell(ix, iy, cell);
         if (!c) continue;
-        const maxHp = Math.random() < 0.22 ? 3 : 2;
+        const maxHp = Math.random() < 0.25 ? 2 : 1;
         const br = {
           ix, iy,
           x: originX + ix * cellScreen,
@@ -193,6 +202,7 @@
     for (const br of bricks) drawBrickToLayer(br);
 
     aliveCount = bricks.length;
+    particles = [];
     score = 0;
     lives = START_LIVES;
     gameOver = false;
@@ -204,7 +214,7 @@
     const ph = 14;
     paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 38 - ph, r: 7 };
 
-    const diameter = Math.max(brickPx * 3.92, 20);
+    const diameter = Math.max(brickPx * 15.68, 40);
     ball = {
       r: diameter / 2,
       x: 0, y: 0, vx: 0, vy: 0,
@@ -215,6 +225,27 @@
     hint.classList.add('show');
     hint.innerHTML = '<strong>Desliza la paleta</strong><span>Toca para lanzar la bola de metal</span>';
     running = true;
+  }
+
+
+  function spawnDust(x, y, color, count) {
+    const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(color || 'rgb(140,90,50)');
+    const r = m ? +m[1] : 140, g = m ? +m[2] : 90, b = m ? +m[3] : 50;
+    const n = count || (8 + (Math.random() * 6) | 0);
+    for (let i = 0; i < n; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 0.6 + Math.random() * 2.8;
+      particles.push({
+        x, y,
+        vx: Math.cos(ang) * sp,
+        vy: Math.sin(ang) * sp - 0.8,
+        life: 0.35 + Math.random() * 0.45,
+        maxLife: 0.55 + Math.random() * 0.35,
+        size: 1.1 + Math.random() * 2.4,
+        r, g, b,
+      });
+    }
+    if (particles.length > 280) particles.splice(0, particles.length - 280);
   }
 
   function launch() {
@@ -244,6 +275,7 @@
 
   function hitBrick(br) {
     if (!br.alive) return;
+    spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, br.hp <= 1 ? 14 : 8);
     br.hp--;
     if (br.hp <= 0) {
       br.alive = false;
@@ -316,6 +348,17 @@
 
   function update(dt) {
     if (!running) return;
+
+    // polvo
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60;
+      p.vy += 0.12 * dt * 60; // leve gravedad
+      p.vx *= 0.98;
+    }
 
     if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
     paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
@@ -395,9 +438,20 @@
     ctx.stroke();
   }
 
+  function drawParticles() {
+    for (const p of particles) {
+      const a = Math.max(0, p.life / p.maxLife);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (0.6 + 0.4 * a), 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${0.55 * a})`;
+      ctx.fill();
+    }
+  }
+
   function draw() {
     ctx.clearRect(0, 0, W, H);
     if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
+    drawParticles();
     drawPaddle();
     drawBall();
   }
