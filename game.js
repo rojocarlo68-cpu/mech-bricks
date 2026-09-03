@@ -36,6 +36,8 @@
   let bombs = [];
   let bombTimer = 0;
   let structureCount = 0; // ladrillos aún en la estructura (no caídos)
+  let outro = null; // null | 'slowmo' | 'done'
+  let outroT = 0;   // tiempo real en cámara lenta
 
   function size() {
     return {
@@ -220,15 +222,40 @@
     maybeWin();
   }
 
+  function countFalling() {
+    let n = 0;
+    for (const br of bricks) if (br.alive && br.falling) n++;
+    return n;
+  }
+
+  function startSlowMoOutro() {
+    if (outro || won || gameOver) return;
+    outro = 'slowmo';
+    outroT = 0;
+    bombs = [];
+    // Congelar bola
+    if (ball) { ball.vx = 0; ball.vy = 0; }
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>Cámara lenta</strong><span>El mech se desmorona…</span>';
+  }
+
+  function finishOutro() {
+    if (outro === 'done' || won) return;
+    outro = 'done';
+    won = true;
+    launched = false;
+    bombs = [];
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
+    updateHud();
+  }
+
   function maybeWin() {
-    if (won || gameOver) return;
-    if (structureCount <= 0) {
-      won = true;
-      launched = false;
-      bombs = [];
-      hint.classList.add('show');
-      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
-    }
+    if (won || gameOver || outro === 'done') return;
+    if (structureCount > 0) return;
+    // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria
+    if (countFalling() > 0) startSlowMoOutro();
+    else finishOutro();
   }
 
   function buildLevel() {
@@ -298,6 +325,8 @@
     lives = START_LIVES;
     gameOver = false;
     won = false;
+    outro = null;
+    outroT = 0;
     launched = false;
     updateHud();
 
@@ -594,6 +623,29 @@
 
   function update(dt) {
     if (!running) return;
+
+    // Cámara lenta al derrumbe final
+    let simDt = dt;
+    if (outro === 'slowmo') {
+      outroT += dt;
+      simDt = dt * 0.28; // ~3.5× más lento
+      updateFalling(simDt);
+      // polvo también lento
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= simDt;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        p.x += p.vx * simDt * 60;
+        p.y += p.vy * simDt * 60;
+        p.vy += 0.12 * simDt * 60;
+        p.vx *= 0.98;
+      }
+      if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
+      paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
+      // Terminar cuando dejen de caer o pase el dramatismo
+      if (countFalling() === 0 || outroT > 4.2) finishOutro();
+      return;
+    }
 
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
