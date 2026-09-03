@@ -1,4 +1,4 @@
-/* Mech Arkanoid — bola grande, HP 1–2, polvo, corazones */
+/* Mech Arkanoid — piernas/colapso, bombas, HP suave, polvo, corazones */
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
@@ -14,6 +14,8 @@
   const MIN_BRICKS = 7000;
   const MAX_BRICKS = 12000;
   const START_LIVES = 3;
+  const BOMB_EVERY = 4.2; // segundos
+  const EXPLODE_R = 78;
 
   let W = 0, H = 0, dpr = 1;
   let imgData = null, imgW = 0, imgH = 0;
@@ -29,6 +31,11 @@
   let pointerX = null;
   let lastTs = 0;
   let particles = [];
+  let bombs = [];
+  let bombTimer = 0;
+  let collapsed = false;
+  let legAlive = 0;
+  let minIy = 0, maxIy = 0, legIyStart = 0;
 
   function size() {
     return {
@@ -113,7 +120,7 @@
     const lctx = brickLayer.getContext('2d');
     const pad = 0.35;
     lctx.clearRect(br.x - 0.5, br.y - 0.5, br.w + 1, br.h + 1);
-    if (!br.alive) return;
+    if (!br.alive || br.falling) return;
     const t = br.hp / br.maxHp;
     lctx.fillStyle = shade(br.color, 0.52 + 0.48 * t);
     lctx.fillRect(br.x + pad, br.y + pad, br.w - pad * 2, br.h - pad * 2);
@@ -131,10 +138,11 @@
   }
 
   function renderLives() {
-    // Corazones púrpura oscuro, esquina superior derecha
-    livesEl.innerHTML = Array.from({ length: START_LIVES }, (_, i) => {
-      const on = i < lives;
-      return `<span class="heart${on ? '' : ' empty'}" aria-hidden="true">♥</span>`;
+    let rem = lives;
+    livesEl.innerHTML = Array.from({ length: START_LIVES }, () => {
+      const fill = Math.max(0, Math.min(1, rem));
+      rem -= 1;
+      return `<span class="heart-wrap"><span class="heart-fill" style="width:${(fill * 100).toFixed(1)}%">♥</span></span>`;
     }).join('');
   }
 
@@ -170,13 +178,17 @@
     bricks = [];
     grid = new Int32Array(cols * rows);
     grid.fill(-1);
+    minIy = rows; maxIy = 0;
 
     for (let iy = 0; iy < rows; iy++) {
       for (let ix = 0; ix < cols; ix++) {
         if (bricks.length >= MAX_BRICKS) break;
         const c = avgCell(ix, iy, cell);
         if (!c) continue;
-        const maxHp = Math.random() < 0.25 ? 2 : 1;
+        minIy = Math.min(minIy, iy);
+        maxIy = Math.max(maxIy, iy);
+        // Más blandos: casi todos 1 golpe; ~10% con 2
+        const maxHp = Math.random() < 0.1 ? 2 : 1;
         const br = {
           ix, iy,
           x: originX + ix * cellScreen,
@@ -187,10 +199,22 @@
           hp: maxHp,
           maxHp,
           alive: true,
+          falling: false,
+          isLeg: false,
+          vx: 0,
+          vy: 0,
         };
         grid[iy * cols + ix] = bricks.length;
         bricks.push(br);
       }
+    }
+
+    // Piernas = ~38% inferior de la silueta
+    legIyStart = minIy + Math.floor((maxIy - minIy) * 0.62);
+    legAlive = 0;
+    for (const br of bricks) {
+      br.isLeg = br.iy >= legIyStart;
+      if (br.isLeg) legAlive++;
     }
 
     brickLayer = document.createElement('canvas');
@@ -203,6 +227,9 @@
 
     aliveCount = bricks.length;
     particles = [];
+    bombs = [];
+    bombTimer = 2.5;
+    collapsed = false;
     score = 0;
     lives = START_LIVES;
     gameOver = false;
@@ -223,14 +250,15 @@
     stickBallToPaddle();
 
     hint.classList.add('show');
-    hint.innerHTML = '<strong>Desliza la paleta</strong><span>Toca para lanzar la bola de metal</span>';
+    hint.innerHTML = '<strong>Desliza la paleta</strong><span>Toca para lanzar · rebota bombas para explotar</span>';
     running = true;
   }
 
-
   function spawnDust(x, y, color, count) {
     const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(color || 'rgb(140,90,50)');
-    const r = m ? +m[1] : 140, g = m ? +m[2] : 90, b = m ? +m[3] : 50;
+    const r = m ? +m[1] : 140;
+    const g = m ? +m[2] : 90;
+    const b = m ? +m[3] : 50;
     const n = count || (8 + (Math.random() * 6) | 0);
     for (let i = 0; i < n; i++) {
       const ang = Math.random() * Math.PI * 2;
@@ -245,7 +273,7 @@
         r, g, b,
       });
     }
-    if (particles.length > 280) particles.splice(0, particles.length - 280);
+    if (particles.length > 320) particles.splice(0, particles.length - 320);
   }
 
   function launch() {
@@ -257,38 +285,81 @@
     ball.vy = Math.sin(angle) * ball.speed;
   }
 
-  function loseLife() {
-    lives--;
+  function checkGameOver() {
+    if (lives > 0.001) return false;
+    lives = 0;
+    gameOver = true;
+    launched = false;
+    bombs = [];
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>Game over</strong><span>Pulsa Reiniciar</span>';
     updateHud();
-    if (lives <= 0) {
-      gameOver = true;
-      launched = false;
-      hint.classList.add('show');
-      hint.innerHTML = '<strong>Game over</strong><span>Pulsa Reiniciar</span>';
-      return;
-    }
+    return true;
+  }
+
+  function loseLife() {
+    lives = Math.max(0, lives - 1);
+    updateHud();
+    if (checkGameOver()) return;
     launched = false;
     stickBallToPaddle();
     hint.classList.add('show');
     hint.innerHTML = '<strong>Vida perdida</strong><span>Toca para lanzar de nuevo</span>';
   }
 
-  function hitBrick(br) {
+  function loseQuarterLife() {
+    lives = Math.max(0, +(lives - 0.25).toFixed(2));
+    updateHud();
+    checkGameOver();
+  }
+
+  function destroyBrick(br, pts) {
     if (!br.alive) return;
+    br.alive = false;
+    br.falling = false;
+    aliveCount = Math.max(0, aliveCount - 1);
+    score += pts;
+    if (!br.falling && grid[br.iy * cols + br.ix] >= 0) {
+      grid[br.iy * cols + br.ix] = -1;
+    }
+    drawBrickToLayer(br);
+    if (br.isLeg && !collapsed) {
+      legAlive = Math.max(0, legAlive - 1);
+      if (legAlive <= 0) triggerCollapse();
+    }
+    if (aliveCount <= 0 && !won) {
+      won = true;
+      launched = false;
+      bombs = [];
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
+    }
+  }
+
+  function triggerCollapse() {
+    if (collapsed) return;
+    collapsed = true;
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Piernas fuera!</strong><span>El mech se derrumba</span>';
+    setTimeout(() => { if (collapsed && launched && !gameOver) hint.classList.remove('show'); }, 1600);
+
+    for (const br of bricks) {
+      if (!br.alive || br.isLeg) continue;
+      // Quitar del grid y caer
+      grid[br.iy * cols + br.ix] = -1;
+      br.falling = true;
+      br.vx = (Math.random() - 0.5) * 1.2;
+      br.vy = Math.random() * 0.5;
+      drawBrickToLayer(br); // limpia del layer estático
+    }
+  }
+
+  function hitBrick(br) {
+    if (!br.alive || br.falling) return;
     spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, br.hp <= 1 ? 14 : 8);
     br.hp--;
     if (br.hp <= 0) {
-      br.alive = false;
-      aliveCount--;
-      score += br.maxHp * 10;
-      grid[br.iy * cols + br.ix] = -1;
-      drawBrickToLayer(br);
-      if (aliveCount <= 0) {
-        won = true;
-        launched = false;
-        hint.classList.add('show');
-        hint.innerHTML = '<strong>¡Campo limpio!</strong><span>Reinicia para otra ronda</span>';
-      }
+      destroyBrick(br, br.maxHp * 10);
     } else {
       score += 5;
       drawBrickToLayer(br);
@@ -302,7 +373,64 @@
     ball.speed = boost;
   }
 
-  function collideBricks() {
+  function explodeAt(x, y) {
+    const r2 = EXPLODE_R * EXPLODE_R;
+    spawnDust(x, y, 'rgb(255,120,40)', 40);
+    spawnDust(x, y, 'rgb(80,80,80)', 24);
+    let n = 0;
+    for (const br of bricks) {
+      if (!br.alive) continue;
+      const cx = br.x + br.w / 2;
+      const cy = br.y + br.h / 2;
+      const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+      if (d2 <= r2) {
+        spawnDust(cx, cy, br.color, 6);
+        destroyBrick(br, 15);
+        n++;
+      }
+    }
+    // Empuje a ladrillos que ya caen
+    for (const br of bricks) {
+      if (!br.alive || !br.falling) continue;
+      const cx = br.x + br.w / 2;
+      const cy = br.y + br.h / 2;
+      const dx = cx - x, dy = cy - y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d < EXPLODE_R * 1.4) {
+        br.vx += (dx / d) * 3;
+        br.vy += (dy / d) * 2 - 1;
+      }
+    }
+    updateHud();
+    return n;
+  }
+
+  function spawnBomb() {
+    if (gameOver || won || !launched) return;
+    // Desde torso / brazo (no piernas), preferir mitad izquierda (bola demolicion)
+    const candidates = [];
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.isLeg) continue;
+      if (br.iy > legIyStart - 4) continue;
+      candidates.push(br);
+    }
+    if (!candidates.length) return;
+    // sesgo a la izquierda de la silueta
+    candidates.sort((a, b) => a.x - b.x);
+    const pickPool = candidates.slice(0, Math.max(8, (candidates.length * 0.35) | 0));
+    const src = pickPool[(Math.random() * pickPool.length) | 0];
+    bombs.push({
+      x: src.x + src.w / 2,
+      y: src.y + src.h / 2,
+      vx: (Math.random() - 0.5) * 0.8,
+      vy: 1.2,
+      r: ball.r,
+      reflected: false,
+      alive: true,
+    });
+  }
+
+  function collideBricksWithBall() {
     const ix0 = Math.floor((ball.x - ball.r - originX) / cellScreen) - 1;
     const iy0 = Math.floor((ball.y - ball.r - originY) / cellScreen) - 1;
     const ix1 = Math.floor((ball.x + ball.r - originX) / cellScreen) + 1;
@@ -319,7 +447,7 @@
         const id = grid[iy * cols + ix];
         if (id < 0) continue;
         const br = bricks[id];
-        if (!br.alive) continue;
+        if (!br.alive || br.falling) continue;
         const nx = Math.max(br.x, Math.min(ball.x, br.x + br.w));
         const ny = Math.max(br.y, Math.min(ball.y, br.y + br.h));
         const dx = ball.x - nx;
@@ -346,28 +474,140 @@
     hitBrick(hit);
   }
 
+  function updateBombs(dt) {
+    for (let i = bombs.length - 1; i >= 0; i--) {
+      const b = bombs[i];
+      if (!b.alive) { bombs.splice(i, 1); continue; }
+
+      b.vy += 0.18 * dt * 60;
+      b.x += b.vx * dt * 60;
+      b.y += b.vy * dt * 60;
+
+      if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx); }
+      if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx); }
+
+      // Rebote con paleta
+      if (
+        b.vy > 0 &&
+        b.y + b.r >= paddle.y &&
+        b.y - b.r <= paddle.y + paddle.h &&
+        b.x >= paddle.x - 4 &&
+        b.x <= paddle.x + paddle.w + 4
+      ) {
+        b.y = paddle.y - b.r - 0.5;
+        const hit = (b.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+        const ang = -Math.PI / 2 + Math.max(-1, Math.min(1, hit)) * 0.95;
+        const sp = 6.2;
+        b.vx = Math.cos(ang) * sp;
+        b.vy = Math.sin(ang) * sp;
+        b.reflected = true;
+      }
+
+      // Bomba rebotada golpea ladrillo → explota
+      if (b.reflected) {
+        const ix0 = Math.floor((b.x - b.r - originX) / cellScreen) - 1;
+        const iy0 = Math.floor((b.y - b.r - originY) / cellScreen) - 1;
+        const ix1 = Math.floor((b.x + b.r - originX) / cellScreen) + 1;
+        const iy1 = Math.floor((b.y + b.r - originY) / cellScreen) + 1;
+        let struck = false;
+        for (let iy = iy0; iy <= iy1 && !struck; iy++) {
+          if (iy < 0 || iy >= rows) continue;
+          for (let ix = ix0; ix <= ix1; ix++) {
+            if (ix < 0 || ix >= cols) continue;
+            const id = grid[iy * cols + ix];
+            if (id < 0) continue;
+            const br = bricks[id];
+            if (!br.alive || br.falling) continue;
+            const nx = Math.max(br.x, Math.min(b.x, br.x + br.w));
+            const ny = Math.max(br.y, Math.min(b.y, br.y + br.h));
+            const dx = b.x - nx, dy = b.y - ny;
+            if (dx * dx + dy * dy <= b.r * b.r) {
+              explodeAt(b.x, b.y);
+              b.alive = false;
+              struck = true;
+              break;
+            }
+          }
+        }
+        // También puede explotar al tocar un ladrillo que cae
+        if (!struck) {
+          for (const br of bricks) {
+            if (!br.alive || !br.falling) continue;
+            const nx = Math.max(br.x, Math.min(b.x, br.x + br.w));
+            const ny = Math.max(br.y, Math.min(b.y, br.y + br.h));
+            const dx = b.x - nx, dy = b.y - ny;
+            if (dx * dx + dy * dy <= b.r * b.r) {
+              explodeAt(b.x, b.y);
+              b.alive = false;
+              struck = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!b.alive) { bombs.splice(i, 1); continue; }
+
+      // Se escapó por abajo sin rebote → −¼ vida
+      if (b.y - b.r > H + 6) {
+        if (!b.reflected) loseQuarterLife();
+        bombs.splice(i, 1);
+      }
+    }
+  }
+
+  function updateFalling(dt) {
+    for (const br of bricks) {
+      if (!br.alive || !br.falling) continue;
+      br.vy += 0.35 * dt * 60;
+      br.x += br.vx * dt * 60;
+      br.y += br.vy * dt * 60;
+      br.vx *= 0.995;
+      if (br.y > H + 30) {
+        br.alive = false;
+        aliveCount = Math.max(0, aliveCount - 1);
+      }
+    }
+    if (collapsed && aliveCount <= 0 && !won && !gameOver) {
+      won = true;
+      launched = false;
+      bombs = [];
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
+      updateHud();
+    }
+  }
+
   function update(dt) {
     if (!running) return;
 
-    // polvo
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.life -= dt;
       if (p.life <= 0) { particles.splice(i, 1); continue; }
       p.x += p.vx * dt * 60;
       p.y += p.vy * dt * 60;
-      p.vy += 0.12 * dt * 60; // leve gravedad
+      p.vy += 0.12 * dt * 60;
       p.vx *= 0.98;
     }
 
     if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
     paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
 
+    updateFalling(dt);
+
     if (!launched) {
       stickBallToPaddle();
       return;
     }
     if (gameOver || won) return;
+
+    bombTimer -= dt;
+    if (bombTimer <= 0) {
+      spawnBomb();
+      bombTimer = BOMB_EVERY + Math.random() * 1.8;
+    }
+    updateBombs(dt);
 
     const steps = 3;
     for (let s = 0; s < steps; s++) {
@@ -393,7 +633,7 @@
         ball.vy = Math.sin(ang) * sp;
       }
 
-      collideBricks();
+      collideBricksWithBall();
 
       if (ball.y - ball.r > H + 4) {
         loseLife();
@@ -438,6 +678,48 @@
     ctx.stroke();
   }
 
+  function drawBombs() {
+    for (const b of bombs) {
+      if (!b.alive) continue;
+      const g = ctx.createRadialGradient(
+        b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.1,
+        b.x, b.y, b.r
+      );
+      if (b.reflected) {
+        g.addColorStop(0, '#ffe08a');
+        g.addColorStop(0.45, '#e85d04');
+        g.addColorStop(1, '#5a1408');
+      } else {
+        g.addColorStop(0, '#6a6a72');
+        g.addColorStop(0.5, '#2a2a30');
+        g.addColorStop(1, '#0e0e12');
+      }
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fillStyle = g;
+      ctx.fill();
+      // mecha
+      ctx.strokeStyle = b.reflected ? '#ffb703' : '#c1121f';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y - b.r);
+      ctx.quadraticCurveTo(b.x + 6, b.y - b.r - 10, b.x + 2, b.y - b.r - 16);
+      ctx.stroke();
+      ctx.fillStyle = '#ff9f1c';
+      ctx.beginPath();
+      ctx.arc(b.x + 2, b.y - b.r - 16, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawFallingBricks() {
+    for (const br of bricks) {
+      if (!br.alive || !br.falling) continue;
+      ctx.fillStyle = br.color;
+      ctx.fillRect(br.x, br.y, br.w, br.h);
+    }
+  }
+
   function drawParticles() {
     for (const p of particles) {
       const a = Math.max(0, p.life / p.maxLife);
@@ -451,7 +733,9 @@
   function draw() {
     ctx.clearRect(0, 0, W, H);
     if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
+    drawFallingBricks();
     drawParticles();
+    drawBombs();
     drawPaddle();
     drawBall();
   }

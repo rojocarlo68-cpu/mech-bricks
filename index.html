@@ -16,10 +16,7 @@
       user-select: none;
       -webkit-user-select: none;
     }
-    #wrap {
-      width: 100%; height: 100%;
-      display: flex; flex-direction: column;
-    }
+    #wrap { width: 100%; height: 100%; display: flex; flex-direction: column; }
     #hud {
       flex: 0 0 auto;
       display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
@@ -51,19 +48,26 @@
       right: 12px;
       z-index: 4;
       display: flex;
-      gap: 4px;
+      gap: 6px;
       pointer-events: none;
       filter: drop-shadow(0 1px 3px rgba(0,0,0,.65));
-      font-size: 22px;
-      line-height: 1;
-      color: #4a0a5c;
     }
-    #lives .heart {
-      color: #4a0a5c;
-      text-shadow: 0 0 1px #2a0536;
+    .heart-wrap {
+      width: 22px; height: 20px;
+      position: relative;
+      display: inline-block;
     }
-    #lives .heart.empty {
-      opacity: 0.22;
+    .heart-wrap::before {
+      content: "♥";
+      position: absolute; inset: 0;
+      font-size: 22px; line-height: 20px;
+      color: rgba(74, 10, 92, 0.22);
+    }
+    .heart-fill {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      overflow: hidden;
+      font-size: 22px; line-height: 20px;
+      color: #4a0a5c;
     }
     #hint {
       position: absolute; left: 50%; top: 55%;
