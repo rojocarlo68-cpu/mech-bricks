@@ -327,6 +327,7 @@
     won = false;
     outro = null;
     outroT = 0;
+    window.__outroDust = false;
     launched = false;
     updateHud();
 
@@ -347,26 +348,66 @@
     running = true;
   }
 
-  function spawnDust(x, y, color, count) {
+  function spawnDust(x, y, color, count, opts) {
+    opts = opts || {};
     const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(color || 'rgb(140,90,50)');
-    const r = m ? +m[1] : 140;
-    const g = m ? +m[2] : 90;
-    const b = m ? +m[3] : 50;
+    let r = m ? +m[1] : 140;
+    let g = m ? +m[2] : 90;
+    let b = m ? +m[3] : 50;
+    // polvo más grisáceo en impactos de suelo
+    if (opts.ground) {
+      r = ((r + 160) / 2) | 0;
+      g = ((g + 150) / 2) | 0;
+      b = ((b + 130) / 2) | 0;
+    }
     const n = count || (8 + (Math.random() * 6) | 0);
+    const spread = opts.spread || 1;
+    const up = opts.up || 0.8;
     for (let i = 0; i < n; i++) {
-      const ang = Math.random() * Math.PI * 2;
-      const sp = 0.6 + Math.random() * 2.8;
+      const ang = opts.hemisphere
+        ? -Math.PI + Math.random() * Math.PI // hacia arriba
+        : Math.random() * Math.PI * 2;
+      const sp = (0.5 + Math.random() * 3.4) * spread;
+      // trayectorias impredecibles
+      const jx = (Math.random() - 0.5) * 1.8 * spread;
+      const jy = (Math.random() - 0.5) * 1.8 * spread;
       particles.push({
-        x, y,
-        vx: Math.cos(ang) * sp,
-        vy: Math.sin(ang) * sp - 0.8,
-        life: 0.35 + Math.random() * 0.45,
-        maxLife: 0.55 + Math.random() * 0.35,
-        size: 1.1 + Math.random() * 2.4,
+        x: x + (Math.random() - 0.5) * (opts.jitter || 4),
+        y: y + (Math.random() - 0.5) * 2,
+        vx: Math.cos(ang) * sp + jx,
+        vy: Math.sin(ang) * sp - up + jy * 0.5,
+        life: (opts.long ? 0.7 : 0.35) + Math.random() * (opts.long ? 0.9 : 0.45),
+        maxLife: (opts.long ? 1.1 : 0.55) + Math.random() * (opts.long ? 0.8 : 0.35),
+        size: (opts.big ? 2.2 : 1.1) + Math.random() * (opts.big ? 5.5 : 2.4),
         r, g, b,
+        spin: (Math.random() - 0.5) * 0.4,
       });
     }
-    if (particles.length > 320) particles.splice(0, particles.length - 320);
+    if (particles.length > 900) particles.splice(0, particles.length - 900);
+  }
+
+  function spawnGroundCloud(x, intensity) {
+    const k = intensity || 1;
+    spawnDust(x, groundY - 2, 'rgb(120,100,80)', (18 * k) | 0, {
+      ground: true, hemisphere: true, spread: 1.6 + k * 0.4, up: 1.4 + k, big: true, long: true, jitter: 28,
+    });
+    spawnDust(x, groundY - 4, 'rgb(90,85,80)', (12 * k) | 0, {
+      ground: true, hemisphere: true, spread: 2.2, up: 2.2, big: true, long: true, jitter: 40,
+    });
+    // chispas / escombros impredecibles
+    spawnDust(x, groundY - 6, 'rgb(255,160,60)', (6 * k) | 0, {
+      spread: 2.8, up: 3.2, long: true, jitter: 10,
+    });
+  }
+
+  function spawnLandingBurst(br) {
+    const x = br.x + br.w / 2;
+    spawnGroundCloud(x, 0.7 + Math.random() * 0.6);
+    if (Math.random() < 0.35) {
+      // mini explosión ocasional al impactar
+      spawnDust(x, groundY - 8, 'rgb(255,100,30)', 16, { spread: 2.5, up: 3.5, big: true, long: true });
+      spawnDust(x, groundY - 4, 'rgb(60,60,60)', 20, { ground: true, hemisphere: true, spread: 2, up: 2, big: true, long: true, jitter: 22 });
+    }
   }
 
   function launch() {
@@ -596,6 +637,8 @@
 
   function updateFalling(dt) {
     const step = dt * 60;
+    let landed = 0;
+    let landX = 0;
     for (const br of bricks) {
       if (!br.alive || !br.falling || br.settled) continue;
       br.vy += G * step; // pesados
@@ -603,21 +646,48 @@
       br.y += br.vy * step;
       br.vx *= 0.998;
 
-      // Suelo bajo los pies del mech
-      if (br.y + br.h >= groundY) {
-        br.y = groundY - br.h;
-        br.vx *= 0.4;
+      // Rebote suave entre escombros ya amontonados (altura de pila)
+      let stackTop = groundY;
+      // muestreo barato: unos settled cercanos
+      for (let k = 0; k < 6; k++) {
+        const o = bricks[(Math.random() * bricks.length) | 0];
+        if (!o.alive || !o.settled) continue;
+        if (Math.abs(o.x - br.x) > br.w * 1.2) continue;
+        stackTop = Math.min(stackTop, o.y);
+      }
+
+      if (br.y + br.h >= stackTop) {
+        br.y = stackTop - br.h;
+        // amontonar con un poco de desorden
+        br.x += (Math.random() - 0.5) * br.w * 0.35;
+        br.vx *= 0.25;
         br.vy = 0;
         br.falling = false;
         br.settled = true;
-        spawnDust(br.x + br.w / 2, br.y + br.h, br.color, 3);
+        landed++;
+        landX += br.x + br.w / 2;
+        spawnLandingBurst(br);
         continue;
       }
-
-      if (br.y > H + 40) {
-        br.alive = false;
+      // Nunca desaparecen: si se van muy abajo, clavar en suelo
+      if (br.y > H) {
+        br.y = groundY - br.h;
         br.falling = false;
+        br.settled = true;
+        landed++;
+        landX += br.x + br.w / 2;
+        spawnLandingBurst(br);
       }
+    }
+    // Nube grande si caen muchos a la vez
+    if (landed >= 12) {
+      spawnGroundCloud(landX / landed, 1.6 + Math.min(2.5, landed / 40));
+      // varias bocanadas a lo largo del suelo
+      for (let i = 0; i < 5; i++) {
+        spawnGroundCloud(originX + Math.random() * (W * 0.6) + W * 0.2, 1.1);
+      }
+    } else if (landed >= 3) {
+      spawnGroundCloud(landX / landed, 1.0);
     }
   }
 
@@ -643,7 +713,18 @@
       if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
       paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
       // Terminar cuando dejen de caer o pase el dramatismo
-      if (countFalling() === 0 || outroT > 4.2) finishOutro();
+      if (countFalling() === 0 || outroT > 5.5) {
+        if (outroT < 5.2 && countFalling() === 0 && !window.__outroDust) {
+          window.__outroDust = true;
+          for (let i = 0; i < 10; i++) {
+            spawnGroundCloud(W * (0.12 + i * 0.08), 2.0);
+          }
+        }
+        if (outroT > 5.5 || (countFalling() === 0 && outroT > 4.6 && window.__outroDust)) {
+          window.__outroDust = false;
+          finishOutro();
+        }
+      }
       return;
     }
 
@@ -798,9 +879,10 @@
   function drawParticles() {
     for (const p of particles) {
       const a = Math.max(0, p.life / p.maxLife);
+      const s = p.size * (0.7 + 0.55 * (1 - a)); // se expanden al morir = nube
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * (0.6 + 0.4 * a), 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${0.55 * a})`;
+      ctx.arc(p.x, p.y, s, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${0.42 * a})`;
       ctx.fill();
     }
   }
