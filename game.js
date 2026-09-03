@@ -12,7 +12,7 @@
   const resetBtn = document.getElementById('reset');
 
   const IMG_SRC = 'mech.jpeg';
-  const MAX_BRICKS = 1800;
+  const MAX_BRICKS = 7200;
   const BG_THRESH = 245; // skip near-white / light grey studio bg
 
   let engine, runner, render;
