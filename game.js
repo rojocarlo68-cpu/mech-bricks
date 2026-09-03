@@ -257,7 +257,7 @@
         if (bricks.length >= MAX_BRICKS) break;
         const c = avgCell(ix, iy, cell);
         if (!c) continue;
-        const maxHp = Math.random() < 0.1 ? 2 : 1;
+        const maxHp = 1; // nivel 1: todos 1 golpe
         const br = {
           ix, iy,
           x: originX + ix * cellScreen,
@@ -309,7 +309,7 @@
     ball = {
       r: diameter / 2,
       x: 0, y: 0, vx: 0, vy: 0,
-      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)),
+      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7,
     };
     stickBallToPaddle();
 
@@ -403,7 +403,7 @@
       updateHud();
     }
     const sp = Math.hypot(ball.vx, ball.vy);
-    const boost = Math.min(9.6, sp * 1.0035);
+    const boost = Math.min(6.8, sp * 1.002); // nivel 1: ramp suave
     const ang = Math.atan2(ball.vy, ball.vx);
     ball.vx = Math.cos(ang) * boost;
     ball.vy = Math.sin(ang) * boost;
