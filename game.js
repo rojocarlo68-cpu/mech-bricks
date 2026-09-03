@@ -12,7 +12,7 @@
   const resetBtn = document.getElementById('reset');
 
   const IMG_SRC = 'mech.jpeg';
-  const MAX_BRICKS = 7200;
+  const MAX_BRICKS = 9000;
   const BG_THRESH = 245; // skip near-white / light grey studio bg
 
   let engine, runner, render;
@@ -65,7 +65,7 @@
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
-        const maxSide = 720;
+        const maxSide = 900;
         let w = img.naturalWidth, h = img.naturalHeight;
         const scale = Math.min(1, maxSide / Math.max(w, h));
         w = Math.round(w * scale);
