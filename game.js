@@ -484,7 +484,7 @@
       if (br.alive && !br.falling && !br.settled) structureCount++;
     }
     // Colapso masivo: ≤20% de la estructura inicial → todo cae
-    if (structureCount > 0 && structureStartCount > 0 && structureCount <= structureStartCount * 0.20) {
+    if (structureCount > 0 && structureStartCount > 0 && structureCount <= structureStartCount * 0.30) {
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
         if (!br.alive || br.falling || br.settled) continue;
