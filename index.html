@@ -166,6 +166,53 @@
     .shop-item button, .pack-item button { padding: 8px 12px; min-height: 36px; font-size: 13px; }
     .back-row { margin-top: 10px; }
     #packSlots { font-size: 12px; opacity: .75; margin-bottom: 10px; }
+
+    #laserCd {
+      display: none;
+      flex: 0 0 auto;
+      width: 100%;
+      padding: 4px 12px 6px;
+      background: rgba(0,0,0,.4);
+      pointer-events: none;
+      text-align: center;
+      z-index: 2;
+    }
+    #laserCd .laser-cd-inner {
+      width: min(260px, 70vw);
+      margin: 0 auto;
+    }
+    #laserCd.show { display: block; }
+    #laserCd .laser-cd-label {
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      color: #9ad8ff;
+      margin-bottom: 4px;
+      text-shadow: 0 1px 3px rgba(0,0,0,.85);
+    }
+    #laserCd .laser-cd-track {
+      height: 7px;
+      border-radius: 999px;
+      background: rgba(20, 28, 40, 0.72);
+      border: 1px solid rgba(120, 200, 255, 0.35);
+      overflow: hidden;
+    }
+    #laserCdFill {
+      height: 100%;
+      width: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #1e90ff, #5cf0ff 55%, #e8ffff);
+      box-shadow: 0 0 10px rgba(80, 220, 255, 0.65);
+      transition: width 0.08s linear;
+    }
+    #laserCd.firing .laser-cd-label { color: #dffcff; }
+    #laserCd.firing #laserCdFill {
+      animation: laserPulse 0.45s ease-in-out infinite alternate;
+    }
+    @keyframes laserPulse {
+      from { filter: brightness(1); opacity: 0.85; }
+      to { filter: brightness(1.35); opacity: 1; }
+    }
   </style>
 </head>
 <body>
@@ -177,6 +224,12 @@
         <img id="btnPauseImg" src="btn-pause.png" alt="Pausa" />
       </button>
       <button type="button" class="secondary" id="reset">Reiniciar</button>
+    </div>
+    <div id="laserCd" aria-hidden="true">
+      <div class="laser-cd-inner">
+        <div class="laser-cd-label">Cañones · enfriamiento</div>
+        <div class="laser-cd-track"><div id="laserCdFill"></div></div>
+      </div>
     </div>
     <div id="stage">
       <div id="topRight">
@@ -225,6 +278,6 @@
       </div>
     </div>
   </div>
-  <script src="game.js?v=6"></script>
+  <script src="game.js?v=7"></script>
 </body>
 </html>

@@ -30,7 +30,7 @@
 
   const SHOP = [
     { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 1080 },
-    { id: 'laser', name: 'Pistola láser', desc: 'Rayo vertical que parte ladrillos', icon: '🔫', price: 1120 },
+    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · ráfagas + enfriamiento', icon: '🔫', price: 1120 },
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
     { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 1090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
@@ -59,7 +59,15 @@
   let lastTs = 0;
   let particles = [];
   let paddleImg = null;
+  let paddleLaserImg = null;
   let paddleTrail = []; // estela azul
+  let laserCannonsActive = false;
+  let laserPhase = null; // 'fire' | 'cooldown'
+  let laserPhaseT = 0;
+  const LASER_FIRE_S = 1.0;
+  const LASER_CD_S = 7.0;
+  let laserCdEl = null;
+  let laserCdFillEl = null;
   let bombImg = null;
   let bombArmedImg = null;
   let bombPlayerImg = null;
@@ -209,6 +217,77 @@
     ball.y = paddle.y - ball.r - 2;
     ball.vx = 0;
     ball.vy = 0;
+  }
+
+  function activePaddleImg() {
+    if (laserCannonsActive && paddleLaserImg) return paddleLaserImg;
+    return paddleImg;
+  }
+
+  function paddleAspectRatio() {
+    const img = activePaddleImg();
+    if (img && img.naturalWidth > 0) {
+      return img.naturalHeight / img.naturalWidth;
+    }
+    return 347 / 1075;
+  }
+
+  function paddleHeightForWidth(w) {
+    const ar = paddleAspectRatio();
+    const h = w * ar;
+    return Math.max(26, Math.min(h, Math.max(52, w * 0.48)));
+  }
+
+  function cannonXs() {
+    return [
+      paddle.x + paddle.w * 0.12,
+      paddle.x + paddle.w * 0.88,
+    ];
+  }
+
+  function ensureLaserCdEls() {
+    if (!laserCdEl) laserCdEl = document.getElementById('laserCd');
+    if (!laserCdFillEl) laserCdFillEl = document.getElementById('laserCdFill');
+  }
+
+  function updateLaserCdUi() {
+    ensureLaserCdEls();
+    if (!laserCdEl) return;
+    if (!laserCannonsActive) {
+      laserCdEl.classList.remove('show', 'firing');
+      return;
+    }
+    laserCdEl.classList.add('show');
+    if (laserPhase === 'fire') {
+      laserCdEl.classList.add('firing');
+      if (laserCdFillEl) laserCdFillEl.style.width = '100%';
+    } else {
+      laserCdEl.classList.remove('firing');
+      const t = Math.max(0, Math.min(1, laserPhaseT / LASER_CD_S));
+      // depleting bar during cooldown
+      if (laserCdFillEl) laserCdFillEl.style.width = (t * 100).toFixed(1) + '%';
+    }
+  }
+
+  function clearLaserCannons() {
+    laserCannonsActive = false;
+    laserPhase = null;
+    laserPhaseT = 0;
+    updateLaserCdUi();
+  }
+
+  function startLaserCannons() {
+    laserCannonsActive = true;
+    laserPhase = 'fire';
+    laserPhaseT = LASER_FIRE_S;
+    // refrescar alto de paleta al cambiar de skin
+    if (paddle) {
+      const cx = paddle.x + paddle.w / 2;
+      paddle.h = paddleHeightForWidth(paddle.w);
+      paddle.y = H - 28 - paddle.h;
+      paddle.x = Math.max(6, Math.min(W - paddle.w - 6, cx - paddle.w / 2));
+    }
+    updateLaserCdUi();
   }
 
   function brickCells(br) {
@@ -653,9 +732,10 @@
     launched = false;
     updateHud();
 
+    clearLaserCannons();
     basePaddleW = Math.min(168, W * 0.42) * (level().paddleScale || 1);
     const pw = basePaddleW;
-    const ph = Math.max(28, pw * (271 / 1030));
+    const ph = paddleHeightForWidth(pw);
     paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
     paddleTrail = [];
     bigPaddleUntil = 0;
@@ -713,6 +793,41 @@
     if (particles.length > 900) particles.splice(0, particles.length - 900);
   }
 
+  function spawnMetalSparks(x, y) {
+    const palette = [
+      [255, 255, 245],
+      [255, 230, 120],
+      [255, 180, 60],
+      [255, 140, 40],
+      [240, 240, 255],
+    ];
+    const n = 14 + (Math.random() * 10) | 0;
+    for (let i = 0; i < n; i++) {
+      const [r, g, b] = palette[(Math.random() * palette.length) | 0];
+      const ang = -Math.PI + Math.random() * Math.PI; // hacia arriba / afuera
+      const sp = 2.2 + Math.random() * 5.5;
+      particles.push({
+        x: x + (Math.random() - 0.5) * 10,
+        y: y + (Math.random() - 0.5) * 4,
+        vx: Math.cos(ang) * sp + (Math.random() - 0.5) * 1.5,
+        vy: Math.sin(ang) * sp - (2.5 + Math.random() * 2.5),
+        life: 0.18 + Math.random() * 0.28,
+        maxLife: 0.28 + Math.random() * 0.28,
+        size: 0.7 + Math.random() * 1.8,
+        r, g, b,
+        spin: (Math.random() - 0.5) * 0.8,
+        metal: true,
+      });
+    }
+    if (particles.length > 900) particles.splice(0, particles.length - 900);
+  }
+
+  function spawnCannonSmoke(x, y) {
+    spawnDust(x, y, 'rgb(160,160,165)', 3 + (Math.random() * 3) | 0, {
+      spread: 0.55, up: 1.6, long: true, jitter: 6, hemisphere: true,
+    });
+  }
+
   function spawnGroundCloud(x, intensity) {
     const k = intensity || 1;
     spawnDust(x, groundY - 2, 'rgb(120,100,80)', (18 * k) | 0, {
@@ -752,6 +867,7 @@
     gameOver = true;
     launched = false;
     bombs = [];
+    clearLaserCannons();
     hint.classList.add('show');
     hint.innerHTML = '<strong>Game over</strong><span>Pulsa Reiniciar</span>';
     updateHud();
@@ -948,6 +1064,7 @@
         b.vx = Math.cos(ang) * sp;
         b.vy = Math.sin(ang) * sp;
         b.reflected = true;
+        spawnMetalSparks(b.x, paddle.y);
       }
 
       if (b.reflected) {
@@ -1178,14 +1295,16 @@
       if (Math.abs(paddle.w - target) > 0.5) {
         const cx = paddle.x + paddle.w / 2;
         paddle.w = target;
-        paddle.h = Math.max(28, paddle.w * (271 / 1030));
+        paddle.h = paddleHeightForWidth(paddle.w);
+        paddle.y = H - 28 - paddle.h;
         paddle.x = cx - paddle.w / 2;
       }
     } else if (bigPaddleUntil && performance.now() >= bigPaddleUntil) {
       bigPaddleUntil = 0;
       const cx = paddle.x + paddle.w / 2;
       paddle.w = basePaddleW;
-      paddle.h = Math.max(28, paddle.w * (271 / 1030));
+      paddle.h = paddleHeightForWidth(paddle.w);
+      paddle.y = H - 28 - paddle.h;
       paddle.x = cx - paddle.w / 2;
     }
     updateBg(dt);
@@ -1212,8 +1331,8 @@
         if (p.life <= 0) { particles.splice(i, 1); continue; }
         p.x += p.vx * simDt * 60;
         p.y += p.vy * simDt * 60;
-        p.vy += 0.12 * simDt * 60;
-        p.vx *= 0.98;
+        p.vy += (p.metal ? 0.04 : 0.12) * simDt * 60;
+        p.vx *= p.metal ? 0.96 : 0.98;
       }
       const prevPxS = paddle.x;
       if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
@@ -1252,9 +1371,11 @@
       if (p.life <= 0) { particles.splice(i, 1); continue; }
       p.x += p.vx * dt * 60;
       p.y += p.vy * dt * 60;
-      p.vy += 0.12 * dt * 60;
-      p.vx *= 0.98;
+      p.vy += (p.metal ? 0.04 : 0.12) * dt * 60;
+      p.vx *= p.metal ? 0.96 : 0.98;
     }
+
+    updateLaserCannons(dt);
 
     const prevPx = paddle.x;
     if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
@@ -1314,6 +1435,7 @@
         const sp = Math.max(ball.speed, Math.hypot(ball.vx, ball.vy));
         ball.vx = Math.cos(ang) * sp;
         ball.vy = Math.sin(ang) * sp;
+        spawnMetalSparks(ball.x, paddle.y);
       }
 
       collideBricksWithBall();
@@ -1360,19 +1482,43 @@
   function drawPaddle() {
     drawPaddleTrail();
     const { x, y, w, h } = paddle;
-    if (paddleImg) {
+    const skin = activePaddleImg();
+    if (skin) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
+      const glow = laserCannonsActive
+        ? ['rgba(80,220,255,0.42)', 'rgba(40,160,255,0)']
+        : ['rgba(90,210,255,0.35)', 'rgba(40,140,255,0)'];
       const gg = ctx.createRadialGradient(x + w / 2, y + h * 0.55, 4, x + w / 2, y + h * 0.55, w * 0.55);
-      gg.addColorStop(0, 'rgba(90,210,255,0.35)');
-      gg.addColorStop(1, 'rgba(40,140,255,0)');
+      gg.addColorStop(0, glow[0]);
+      gg.addColorStop(1, glow[1]);
       ctx.fillStyle = gg;
       ctx.fillRect(x - 10, y - 6, w + 20, h + 14);
       ctx.restore();
-      ctx.drawImage(paddleImg, x, y, w, h);
+      ctx.drawImage(skin, x, y, w, h);
     } else {
       ctx.fillStyle = '#9ad8ff';
       ctx.fillRect(x, y, w, h);
+    }
+  }
+
+  function drawLaserBeams() {
+    if (!laserCannonsActive || laserPhase !== 'fire' || !paddle) return;
+    const tipsY = paddle.y + paddle.h * 0.22;
+    const half = Math.max(brickPx * 1.0, 8);
+    const pulse = 0.75 + 0.25 * Math.sin(performance.now() * 0.028);
+    for (const x of cannonXs()) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createLinearGradient(x, 0, x, tipsY);
+      g.addColorStop(0, `rgba(180,255,255,${0.05 * pulse})`);
+      g.addColorStop(0.35, `rgba(80,220,255,${0.55 * pulse})`);
+      g.addColorStop(1, `rgba(40,160,255,${0.9 * pulse})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(x - half * 1.6, 0, half * 3.2, tipsY);
+      ctx.fillStyle = `rgba(220,255,255,${0.85 * pulse})`;
+      ctx.fillRect(x - half * 0.35, 0, half * 0.7, tipsY);
+      ctx.restore();
     }
   }
 
@@ -1526,6 +1672,21 @@
   function drawParticles() {
     for (const p of particles) {
       const a = Math.max(0, p.life / p.maxLife);
+      if (p.metal) {
+        const s = p.size * (0.85 + 0.4 * a);
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, s * 1.6, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${0.35 * a})`;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, s, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${0.95 * a})`;
+        ctx.fill();
+        ctx.restore();
+        continue;
+      }
       const s = p.size * (0.7 + 0.55 * (1 - a)); // se expanden al morir = nube
       ctx.beginPath();
       ctx.arc(p.x, p.y, s, 0, Math.PI * 2);
@@ -1630,6 +1791,7 @@
     drawLooseBricks();
     drawParticles();
     drawBombs();
+    drawLaserBeams();
     drawPaddle();
     drawBall();
     ctx.restore();
@@ -1698,11 +1860,18 @@
   }
 
   function loadPaddle() {
-    return new Promise((resolve, reject) => {
+    const load = (src) => new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => { paddleImg = img; resolve(); };
+      img.onload = () => resolve(img);
       img.onerror = reject;
-      img.src = 'paddle.png';
+      img.src = src;
+    });
+    return Promise.all([
+      load('paddle.png'),
+      load('paddle-laser.png'),
+    ]).then(([a, b]) => {
+      paddleImg = a;
+      paddleLaserImg = b;
     });
   }
 
@@ -1866,9 +2035,9 @@
       hint.classList.add('show');
       hint.innerHTML = '<strong>💣 Bomba lista</strong><span>Bomba lista · toca el botón arriba</span>';
     } else if (id === 'laser') {
-      fireLaser();
+      startLaserCannons();
       hint.classList.add('show');
-      hint.innerHTML = '<strong>🔫 Láser</strong><span>Rayo disparado</span>';
+      hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>Ráfagas duales · enfriamiento 7s</span>';
     } else if (id === 'ballskin') {
       ballSkinOn = true;
       if (ball && baseBallR) ball.r = baseBallR * 1.1;
@@ -1880,20 +2049,57 @@
     setTimeout(() => { if (!paused) hint.classList.remove('show'); }, 1200);
   }
 
-  function fireLaser() {
-    // Rayo vertical desde el centro de la paleta hacia arriba
-    const x = paddle.x + paddle.w / 2;
-    const half = Math.max(brickPx * 1.2, 10);
-    for (const br of bricks) {
-      if (!br.alive || br.falling || br.settled) continue;
-      const cx = br.x + br.w / 2;
-      if (Math.abs(cx - x) <= half && br.y + br.h >= 0 && br.y < paddle.y) {
-        spawnDust(cx, br.y + br.h / 2, br.color, 6);
+  function burnLaserColumn(x) {
+    const half = Math.max(brickPx * 1.0, 8);
+    const ox = originX + structureDX;
+    const oy = originY + structureDY;
+    const ix0 = Math.max(0, Math.floor((x - half - ox) / cellScreen) - 1);
+    const ix1 = Math.min(cols - 1, Math.floor((x + half - ox) / cellScreen) + 1);
+    for (let iy = 0; iy < rows; iy++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const id = grid[iy * cols + ix];
+        if (id < 0) continue;
+        const br = bricks[id];
+        if (!br.alive || br.falling || br.settled) continue;
+        const cx = br.x + br.w / 2;
+        if (Math.abs(cx - x) > half) continue;
+        if (br.y + br.h < 0 || br.y >= paddle.y) continue;
+        spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
         destroyBrick(br, 12);
       }
     }
-    // flash
-    spawnDust(x, paddle.y - 40, 'rgb(120,220,255)', 24, { spread: 1.2, up: 4, long: true, big: true });
+  }
+
+  function updateLaserCannons(dt) {
+    if (!laserCannonsActive || !paddle) return;
+    if (gameOver || won) {
+      clearLaserCannons();
+      return;
+    }
+    laserPhaseT -= dt;
+    if (laserPhase === 'fire') {
+      for (const x of cannonXs()) burnLaserColumn(x);
+      if (laserPhaseT <= 0) {
+        laserPhase = 'cooldown';
+        laserPhaseT = LASER_CD_S;
+      }
+    } else if (laserPhase === 'cooldown') {
+      if (Math.random() < Math.min(1, dt * 8)) {
+        for (const x of cannonXs()) {
+          spawnCannonSmoke(x, paddle.y + paddle.h * 0.18);
+        }
+      }
+      if (laserPhaseT <= 0) {
+        laserPhase = 'fire';
+        laserPhaseT = LASER_FIRE_S;
+        for (const x of cannonXs()) {
+          spawnDust(x, paddle.y - 20, 'rgb(120,220,255)', 12, {
+            spread: 1.0, up: 3.2, long: true, big: true, hemisphere: true,
+          });
+        }
+      }
+    }
+    updateLaserCdUi();
   }
 
   const btnPauseImg = document.getElementById('btnPauseImg');
