@@ -35,7 +35,23 @@
     }
     button.secondary { background: #3a3a42; }
     button:active { transform: scale(.97); opacity: .9; }
-    #btnPause { background: #2b6cb0; }
+    .img-btn {
+      background: transparent !important;
+      padding: 0 !important;
+      min-height: 0 !important;
+      border-radius: 8px;
+      line-height: 0;
+    }
+    .img-btn img {
+      display: block;
+      height: 44px;
+      width: auto;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,.55));
+    }
+    .img-btn:active { transform: scale(.96); opacity: .95; }
+    #pauseOverlay .img-btn img, #shopOverlay .img-btn img { height: 72px; margin: 0 auto; }
+    .menu-btns .img-btn { width: auto; align-self: center; background: transparent !important; }
+
     #stage {
       flex: 1 1 auto;
       position: relative;
@@ -134,7 +150,9 @@
     <div id="hud">
       <h1>Mech Arkanoid</h1>
       <span class="meta" id="count">—</span>
-      <button type="button" id="btnPause">Pausa</button>
+      <button type="button" class="img-btn" id="btnPause" aria-label="Pausa">
+        <img id="btnPauseImg" src="btn-pause.png" alt="Pausa" />
+      </button>
       <button type="button" class="secondary" id="reset">Reiniciar</button>
     </div>
     <div id="stage">
@@ -152,7 +170,9 @@
           <p class="sub">Partida en espera</p>
           <div class="menu-btns">
             <button type="button" id="btnResume">Continuar</button>
-            <button type="button" class="secondary" id="btnShop">Tienda</button>
+            <button type="button" class="img-btn" id="btnShop" aria-label="Tienda">
+              <img id="btnShopImg" src="btn-shop.png" alt="Tienda" />
+            </button>
             <button type="button" class="secondary" id="btnPack">Mochila</button>
           </div>
         </div>

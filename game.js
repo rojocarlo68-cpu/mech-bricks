@@ -57,6 +57,8 @@
   let particles = [];
   let paddleImg = null;
   let paddleTrail = []; // estela azul
+  let bombImg = null;
+  let bombArmedImg = null;
   let bgImg = null;
   let bgT = 0;
   let bgDust = [];
@@ -294,8 +296,22 @@
     outro = 'slowmo';
     outroT = 0;
     bombs = [];
-    // Congelar bola
     if (ball) { ball.vx = 0; ball.vy = 0; }
+    bumpCam(8);
+    // Caos inicial: explosiones, humo, pedazos
+    for (let i = 0; i < 7; i++) {
+      const x = originX + Math.random() * (imgW * (cellScreen / Math.max(1, cell)));
+      const y = originY + Math.random() * (groundY - originY) * 0.85;
+      spawnDust(x, y, 'rgb(255,110,30)', 28, { spread: 2.4, up: 3.2, big: true, long: true, jitter: 30 });
+      spawnDust(x, y, 'rgb(60,55,50)', 34, { ground: true, hemisphere: true, spread: 2.2, up: 2.6, big: true, long: true, jitter: 40 });
+      spawnDust(x, y, 'rgb(200,200,200)', 18, { spread: 1.8, up: 2.0, long: true, jitter: 24 });
+    }
+    // Empujar escombros que ya caen
+    for (const br of bricks) {
+      if (!br.alive || !br.falling) continue;
+      br.vx += (Math.random() - 0.5) * 4;
+      br.vy -= Math.random() * 2.5;
+    }
     hint.classList.add('show');
     hint.innerHTML = '<strong>Cámara lenta</strong><span>El mech se desmorona…</span>';
   }
@@ -841,7 +857,15 @@
     let simDt = dt;
     if (outro === 'slowmo') {
       outroT += dt;
-      simDt = dt * 0.28; // ~3.5× más lento
+      simDt = dt * 0.28;
+      // ráfagas de caos mientras cae
+      if (Math.random() < 0.08) {
+        bumpCam(1.2);
+        const x = W * (0.2 + Math.random() * 0.6);
+        const y = groundY - 20 - Math.random() * 120;
+        spawnDust(x, y, 'rgb(255,130,40)', 16, { spread: 2.2, up: 3, big: true, long: true, jitter: 20 });
+        spawnDust(x, y, 'rgb(70,65,60)', 22, { ground: true, hemisphere: true, spread: 2, up: 2.4, big: true, long: true, jitter: 28 });
+      }
       updateFalling(simDt);
       // polvo también lento
       for (let i = particles.length - 1; i >= 0; i--) {
@@ -1033,36 +1057,24 @@
   function drawBombs() {
     for (const b of bombs) {
       if (!b.alive) continue;
-      const g = ctx.createRadialGradient(
-        b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.1,
-        b.x, b.y, b.r
-      );
-      if (b.reflected) {
-        g.addColorStop(0, '#ffe08a');
-        g.addColorStop(0.45, '#e85d04');
-        g.addColorStop(1, '#5a1408');
+      const img = b.reflected ? (bombArmedImg || bombImg) : bombImg;
+      const size = b.r * 2.6;
+      if (img) {
+        ctx.save();
+        if (b.reflected) {
+          ctx.shadowColor = 'rgba(255,120,30,0.85)';
+          ctx.shadowBlur = 18;
+        }
+        ctx.drawImage(img, b.x - size / 2, b.y - size / 2, size, size);
+        ctx.restore();
       } else {
-        g.addColorStop(0, '#6a6a72');
-        g.addColorStop(0.5, '#2a2a30');
-        g.addColorStop(1, '#0e0e12');
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        ctx.fillStyle = b.reflected ? '#e85d04' : '#333';
+        ctx.fill();
       }
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      ctx.fillStyle = g;
-      ctx.fill();
-      ctx.strokeStyle = b.reflected ? '#ffb703' : '#c1121f';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(b.x, b.y - b.r);
-      ctx.quadraticCurveTo(b.x + 6, b.y - b.r - 10, b.x + 2, b.y - b.r - 16);
-      ctx.stroke();
-      ctx.fillStyle = '#ff9f1c';
-      ctx.beginPath();
-      ctx.arc(b.x + 2, b.y - b.r - 16, 2.2, 0, Math.PI * 2);
-      ctx.fill();
     }
   }
-
   function drawLooseBricks() {
     for (const br of bricks) {
       if (!br.alive) continue;
@@ -1143,7 +1155,7 @@
   }
 
   function bumpCam(amount) {
-    camShake = Math.min(14, camShake + amount);
+    camShake = Math.min(18, camShake + amount * 1.3);
   }
 
   function draw() {
@@ -1151,7 +1163,7 @@
     ctx.clearRect(0, 0, W, H);
 
     // Cámara inquieta: temblor base + picos con impacto
-    const rest = paused ? 0.15 : 0.55;
+    const rest = paused ? 0.2 : 0.72; // +30% inquietud base
     const amp = rest + camShake;
     const t = performance.now() * 0.001;
     const ox = Math.sin(t * 17.3) * amp * 0.35 + Math.sin(t * 41.1) * amp * 0.18;
@@ -1245,6 +1257,19 @@
     });
   }
 
+  function loadBombArts() {
+    const load = (src, assign) => new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => { assign(img); resolve(); };
+      img.onerror = reject;
+      img.src = src;
+    });
+    return Promise.all([
+      load('bomb.png', (i) => { bombImg = i; }),
+      load('bomb-armed.png', (i) => { bombArmedImg = i; }),
+    ]);
+  }
+
 
   // —— Pausa / Tienda / Mochila ——
   const pauseOverlay = document.getElementById('pauseOverlay');
@@ -1272,6 +1297,8 @@
     setOverlay(pauseOverlay, false);
     setOverlay(shopOverlay, false);
     setOverlay(packOverlay, false);
+    if (typeof setPauseBtn === 'function') setPauseBtn(false);
+    if (typeof setShopBtn === 'function') setShopBtn(false);
   }
   function openShop() {
     paused = true;
@@ -1394,21 +1421,45 @@
     spawnDust(x, paddle.y - 40, 'rgb(120,220,255)', 24, { spread: 1.2, up: 4, long: true, big: true });
   }
 
+  const btnPauseImg = document.getElementById('btnPauseImg');
+  const btnShopImg = document.getElementById('btnShopImg');
+  function setPauseBtn(on) {
+    if (btnPauseImg) btnPauseImg.src = on ? 'btn-pause-on.png' : 'btn-pause.png';
+  }
+  function setShopBtn(on) {
+    if (btnShopImg) btnShopImg.src = on ? 'btn-shop-on.png' : 'btn-shop.png';
+  }
+
+  btnPause.addEventListener('pointerdown', () => setPauseBtn(true));
+  btnPause.addEventListener('pointerup', () => { if (!paused) setPauseBtn(false); });
+  btnPause.addEventListener('pointerleave', () => { if (!paused) setPauseBtn(false); });
   btnPause.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (paused && pauseOverlay.classList.contains('show')) closeAllMenus();
-    else openPause();
+    if (paused && pauseOverlay.classList.contains('show')) {
+      closeAllMenus();
+      setPauseBtn(false);
+    } else {
+      openPause();
+      setPauseBtn(true);
+    }
   });
-  document.getElementById('btnResume').addEventListener('click', (e) => { e.stopPropagation(); closeAllMenus(); });
-  document.getElementById('btnShop').addEventListener('click', (e) => { e.stopPropagation(); openShop(); });
-  document.getElementById('btnPack').addEventListener('click', (e) => { e.stopPropagation(); openPack(); });
-  document.getElementById('btnShopBack').addEventListener('click', (e) => { e.stopPropagation(); openPause(); });
+  document.getElementById('btnResume').addEventListener('click', (e) => {
+    e.stopPropagation(); closeAllMenus(); setPauseBtn(false); setShopBtn(false);
+  });
+  const btnShop = document.getElementById('btnShop');
+  btnShop.addEventListener('pointerdown', () => setShopBtn(true));
+  btnShop.addEventListener('pointerup', () => { /* keep on while shop open */ });
+  btnShop.addEventListener('click', (e) => { e.stopPropagation(); openShop(); setShopBtn(true); });
+  document.getElementById('btnPack').addEventListener('click', (e) => { e.stopPropagation(); openPack(); setShopBtn(false); });
+  document.getElementById('btnShopBack').addEventListener('click', (e) => {
+    e.stopPropagation(); openPause(); setShopBtn(false);
+  });
   document.getElementById('btnPackBack').addEventListener('click', (e) => { e.stopPropagation(); openPause(); });
 
 
   (async function init() {
     try {
-      await Promise.all([loadImage(), loadPaddle(), loadBg()]);
+      await Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts()]);
       buildLevel();
       loading.classList.add('hide');
       requestAnimationFrame(frame);
