@@ -16,7 +16,7 @@
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false, irregularBricks: true },
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
-    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.94, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.85, irregularBricks: true },
+    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.94, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -972,7 +972,7 @@
       rows = Math.ceil(imgH / cell);
       cellScreen = cell * fit;
       // Cubrir todo el grid sin huecos al fondo
-      brickPx = Math.max(3.5, cellScreen + 0.6);
+      brickPx = Math.max(3.5, cellScreen + (level().fly ? 1.15 : 0.6));
       grid = new Int32Array(cols * rows);
       grid.fill(-1);
       minIy = rows;
@@ -1474,12 +1474,24 @@
     const step = dt * 60;
     let landed = 0;
     let landX = 0;
+    const flying = !!(level().fly);
     for (const br of bricks) {
       if (!br.alive || !br.falling || br.settled) continue;
-      br.vy += G * step; // pesados
+      // En niveles aéreos: gravedad suave + deriva, sin amontonar en el suelo
+      br.vy += (flying ? G * 0.35 : G) * step;
       br.x += br.vx * step;
       br.y += br.vy * step;
       br.vx *= 0.998;
+      if (flying) {
+        br.vx += (Math.random() - 0.5) * 0.04 * step;
+        // Desaparecen al salir de pantalla (no hay suelo)
+        if (br.y > H + 40 || br.x < -80 || br.x > W + 80) {
+          br.alive = false;
+          br.falling = false;
+          drawBrickToLayer(br);
+        }
+        continue;
+      }
 
       // Rebote suave entre escombros ya amontonados (altura de pila)
       let stackTop = groundY;
@@ -2224,7 +2236,7 @@
 
     drawBackground();
     drawGround();
-    drawMechShadow();
+    if (!level().fly) drawMechShadow();
     if (brickLayer) {
       if (structureDX || structureDY) {
         ctx.save();
