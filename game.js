@@ -62,7 +62,8 @@
   let paddleLaserImg = null;
   let paddleTrail = []; // estela azul
   let laserCannonsActive = false;
-  let laserPhase = null; // 'fire' | 'cooldown'
+  let laserPhase = null; // 'warmup' | 'fire' | 'cooldown'
+  let laserAwaitUnpause = false;
   let laserPhaseT = 0;
   const LASER_FIRE_S = 1.0;
   const LASER_CD_S = 7.0;
@@ -261,10 +262,12 @@
     if (laserPhase === 'fire') {
       laserCdEl.classList.add('firing');
       if (laserCdFillEl) laserCdFillEl.style.width = '100%';
+    } else if (laserPhase === 'warmup' || laserAwaitUnpause) {
+      laserCdEl.classList.remove('firing');
+      if (laserCdFillEl) laserCdFillEl.style.width = '0%';
     } else {
       laserCdEl.classList.remove('firing');
       const t = Math.max(0, Math.min(1, laserPhaseT / LASER_CD_S));
-      // depleting bar during cooldown
       if (laserCdFillEl) laserCdFillEl.style.width = (t * 100).toFixed(1) + '%';
     }
   }
@@ -273,13 +276,24 @@
     laserCannonsActive = false;
     laserPhase = null;
     laserPhaseT = 0;
+    laserAwaitUnpause = false;
+    updateLaserCdUi();
+  }
+
+  function beginLaserWarmup() {
+    if (!laserCannonsActive) return;
+    laserAwaitUnpause = false;
+    laserPhase = 'warmup';
+    laserPhaseT = 1.0; // 1s después de quitar pausa
     updateLaserCdUi();
   }
 
   function startLaserCannons() {
     laserCannonsActive = true;
-    laserPhase = 'fire';
-    laserPhaseT = LASER_FIRE_S;
+    // Espera a salir de pausa, luego 1s de calentamiento, luego dispara 1s
+    laserAwaitUnpause = true;
+    laserPhase = null;
+    laserPhaseT = 0;
     // refrescar alto de paleta al cambiar de skin
     if (paddle) {
       const cx = paddle.x + paddle.w / 2;
@@ -1074,7 +1088,7 @@
         b.y = paddle.y - b.r - 0.5;
         const hit = (b.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
         const ang = -Math.PI / 2 + Math.max(-1, Math.min(1, hit)) * 0.95;
-        const sp = 6.2;
+        const sp = 6.2 * 1.2; // +20% rebote
         b.vx = Math.cos(ang) * sp;
         b.vy = Math.sin(ang) * sp;
         b.reflected = true;
@@ -1581,6 +1595,26 @@
     if (playerBomb.x + playerBomb.r > W) { playerBomb.x = W - playerBomb.r; playerBomb.vx = -Math.abs(playerBomb.vx); }
     if (playerBomb.y - playerBomb.r < 0) { playerBomb.y = playerBomb.r; playerBomb.vy = Math.abs(playerBomb.vy); }
 
+    // Rebote en la paleta
+    const b = playerBomb;
+    if (
+      paddle &&
+      b.vy > 0 &&
+      b.y + b.r >= paddle.y &&
+      b.y - b.r <= paddle.y + paddle.h &&
+      b.x >= paddle.x - 4 &&
+      b.x <= paddle.x + paddle.w + 4
+    ) {
+      b.y = paddle.y - b.r - 0.5;
+      const hit = (b.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+      const ang = -Math.PI / 2 + Math.max(-1, Math.min(1, hit)) * 0.95;
+      const cur = Math.hypot(b.vx, b.vy) || (ball && ball.speed) || 4;
+      const sp = cur * 1.05;
+      b.vx = Math.cos(ang) * sp;
+      b.vy = Math.sin(ang) * sp;
+      spawnMetalSparks(b.x, paddle.y);
+    }
+
     if (playerBomb.phase === 'fuse' && playerBomb.t >= 3) {
       playerBomb.phase = 'armed';
       playerBomb.t = 0;
@@ -1946,6 +1980,7 @@
     if (typeof setPauseBtn === 'function') setPauseBtn(false);
     if (typeof setShopBtn === 'function') setShopBtn(false);
     if (typeof setPackBtn === 'function') setPackBtn(false);
+    if (laserAwaitUnpause) beginLaserWarmup();
   }
   function openShop() {
     paused = true;
@@ -2053,8 +2088,13 @@
       hint.innerHTML = '<strong>💣 Bomba lista</strong><span>Bomba lista · toca el botón arriba</span>';
     } else if (id === 'laser') {
       startLaserCannons();
+      closeAllMenus();
+      setPauseBtn(false);
+      setShopBtn(false);
+      setPackBtn(false);
+      beginLaserWarmup();
       hint.classList.add('show');
-      hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>Ráfagas duales · enfriamiento 7s</span>';
+      hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>Listos en 1s · ráfaga 1s · CD 7s</span>';
     } else if (id === 'ballskin') {
       ballSkinOn = true;
       if (ball && baseBallR) ball.r = baseBallR * 1.1;
@@ -2093,12 +2133,33 @@
       clearLaserCannons();
       return;
     }
+    if (laserAwaitUnpause || !laserPhase) {
+      updateLaserCdUi();
+      return;
+    }
     laserPhaseT -= dt;
-    if (laserPhase === 'fire') {
-      for (const x of cannonXs()) burnLaserColumn(x);
+    if (laserPhase === 'warmup') {
+      if (laserPhaseT <= 0) {
+        laserPhase = 'fire';
+        laserPhaseT = LASER_FIRE_S; // exactamente 1s
+        for (const x of cannonXs()) {
+          spawnDust(x, paddle.y - 20, 'rgb(120,220,255)', 12, {
+            spread: 1.0, up: 3.2, long: true, big: true, hemisphere: true,
+          });
+        }
+      }
+    } else if (laserPhase === 'fire') {
+      // quemar a ~20 fps efectivo para que el segundo se sienta corto y claro
+      if (!updateLaserCannons._acc) updateLaserCannons._acc = 0;
+      updateLaserCannons._acc += dt;
+      if (updateLaserCannons._acc >= 0.05) {
+        updateLaserCannons._acc = 0;
+        for (const x of cannonXs()) burnLaserColumn(x);
+      }
       if (laserPhaseT <= 0) {
         laserPhase = 'cooldown';
         laserPhaseT = LASER_CD_S;
+        updateLaserCannons._acc = 0;
       }
     } else if (laserPhase === 'cooldown') {
       if (Math.random() < Math.min(1, dt * 8)) {
@@ -2172,7 +2233,7 @@
       if (!launched) return;
       const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
       const ang = Math.atan2(ball.vy, ball.vx);
-      const speed = sp * 0.7;
+      const speed = sp * 0.8; // 20% más lenta que la bola
       playerBomb = {
         x: ball.x,
         y: ball.y,
