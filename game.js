@@ -17,6 +17,14 @@
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
+  // ?level=2 para probar nivel 2 directo
+  (function bootLevelFromUrl() {
+    try {
+      const q = new URLSearchParams(location.search);
+      const n = parseInt(q.get('level') || q.get('n') || '1', 10);
+      if (n >= 1 && n <= LEVELS.length) levelIndex = n - 1;
+    } catch (_) {}
+  })();
 
   const SHOP = [
     { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 80 },
@@ -59,6 +67,7 @@
   let bigPaddleUntil = 0;
   let basePaddleW = 0;
   let minIy = 0, maxIy = 0;
+  let camShake = 0; // cámara ansiosa / agitada
   let bombTimer = 0;
   let structureCount = 0; // ladrillos aún en la estructura (no caídos)
   let outro = null; // null | 'slowmo' | 'done'
@@ -262,6 +271,7 @@
       if (br.alive && !br.falling && !br.settled) structureCount++;
     }
     if (detached > 80) {
+      bumpCam(4.2);
       hint.classList.add('show');
       hint.innerHTML = '<strong>¡Se derrumba!</strong><span>Sin soporte, cae al suelo</span>';
       clearTimeout(window.__hintHide);
@@ -538,6 +548,7 @@
       return;
     }
     lives = Math.max(0, lives - 1);
+    bumpCam(3.2);
     updateHud();
     if (checkGameOver()) return;
     launched = false;
@@ -572,6 +583,7 @@
 
   function hitBrick(br) {
     if (!br.alive || br.falling || br.settled) return;
+    bumpCam(0.55);
     spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, br.hp <= 1 ? 14 : 8);
     br.hp--;
     if (br.hp <= 0) {
@@ -590,6 +602,7 @@
   }
 
   function explodeAt(x, y) {
+    bumpCam(5.5);
     const r2 = EXPLODE_R * EXPLODE_R;
     spawnDust(x, y, 'rgb(255,120,40)', 40);
     spawnDust(x, y, 'rgb(80,80,80)', 24);
@@ -1129,8 +1142,27 @@
     }
   }
 
+  function bumpCam(amount) {
+    camShake = Math.min(14, camShake + amount);
+  }
+
   function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
+
+    // Cámara inquieta: temblor base + picos con impacto
+    const rest = paused ? 0.15 : 0.55;
+    const amp = rest + camShake;
+    const t = performance.now() * 0.001;
+    const ox = Math.sin(t * 17.3) * amp * 0.35 + Math.sin(t * 41.1) * amp * 0.18;
+    const oy = Math.cos(t * 19.7) * amp * 0.28 + Math.sin(t * 33.5) * amp * 0.16;
+    const rot = (Math.sin(t * 13.1) * amp) * 0.00055;
+
+    ctx.save();
+    ctx.translate(W / 2 + ox, H / 2 + oy);
+    ctx.rotate(rot);
+    ctx.translate(-W / 2, -H / 2);
+
     drawBackground();
     drawGround();
     if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
@@ -1139,12 +1171,14 @@
     drawBombs();
     drawPaddle();
     drawBall();
+    ctx.restore();
   }
 
   function frame(ts) {
     const dt = Math.min(0.033, (ts - lastTs) / 1000 || 0.016);
     lastTs = ts;
     update(dt);
+    if (!paused) camShake = Math.max(0, camShake - dt * 6.5);
     draw();
     requestAnimationFrame(frame);
   }
