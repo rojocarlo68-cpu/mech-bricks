@@ -69,6 +69,7 @@
   let laserPhase = null; // 'warmup' | 'fire' | 'cooldown'
   let laserAwaitUnpause = false;
   let laserPhaseT = 0;
+  let laserFireUntil = 0; // performance.now() deadline
   const LASER_FIRE_S = 1.0;
   const LASER_CD_S = 7.0;
   let laserCdEl = null;
@@ -320,6 +321,7 @@
     laserCannonsActive = false;
     laserPhase = null;
     laserPhaseT = 0;
+    laserFireUntil = 0;
     laserAwaitUnpause = false;
     updateLaserCdUi();
   }
@@ -1527,23 +1529,22 @@
         continue;
       }
 
-      // Aterrizar sobre escombros O estructura que siga abajo (si partes el medio, cae encima)
+      // Caen al suelo / escombros del piso — NO se apilan sobre la estructura que quedó abajo
       let stackTop = groundY;
       const bcx = br.x + br.w * 0.5;
       for (let i = 0; i < bricks.length; i++) {
         const o = bricks[i];
-        if (o === br || !o.alive) continue;
-        if (o.falling && !o.settled) continue;
+        if (o === br || !o.alive || !o.settled) continue;
         if (o.x + o.w < br.x - 1 || o.x > br.x + br.w + 1) continue;
         const ocx = o.x + o.w * 0.5;
         if (Math.abs(ocx - bcx) > (o.w + br.w) * 0.65) continue;
-        if (o.y + 1 < br.y) continue;
+        if (o.y < groundY - brickPx * 8) continue; // solo pilas cerca del piso
         stackTop = Math.min(stackTop, o.y);
       }
 
       if (br.y + br.h >= stackTop) {
         br.y = stackTop - br.h;
-        br.x += (Math.random() - 0.5) * br.w * 0.2;
+        br.x += (Math.random() - 0.5) * br.w * 0.25;
         br.vx *= 0.2;
         br.vy = 0;
         br.falling = false;
@@ -2831,11 +2832,12 @@
       updateLaserCdUi();
       return;
     }
-    laserPhaseT -= dt;
     if (laserPhase === 'warmup') {
+      laserPhaseT -= dt;
       if (laserPhaseT <= 0) {
         laserPhase = 'fire';
-        laserPhaseT = LASER_FIRE_S; // exactamente 1s
+        laserFireUntil = performance.now() + LASER_FIRE_S * 1000; // 1.0s exacto
+        laserPhaseT = LASER_FIRE_S;
         for (const x of cannonXs()) {
           spawnDust(x, paddle.y - 20, 'rgb(120,220,255)', 12, {
             spread: 1.0, up: 3.2, long: true, big: true, hemisphere: true,
@@ -2843,19 +2845,22 @@
         }
       }
     } else if (laserPhase === 'fire') {
-      // quemar a ~20 fps efectivo para que el segundo se sienta corto y claro
+      // Apagar al cumplir 1s de reloj (no se alarga con lag)
+      if (performance.now() >= laserFireUntil) {
+        laserPhase = 'cooldown';
+        laserPhaseT = LASER_CD_S;
+        updateLaserCdUi();
+        return;
+      }
+      laserPhaseT = Math.max(0, (laserFireUntil - performance.now()) / 1000);
       if (!updateLaserCannons._acc) updateLaserCannons._acc = 0;
       updateLaserCannons._acc += dt;
-      if (updateLaserCannons._acc >= 0.05) {
+      if (updateLaserCannons._acc >= 0.08) {
         updateLaserCannons._acc = 0;
         for (const x of cannonXs()) burnLaserColumn(x);
       }
-      if (laserPhaseT <= 0) {
-        laserPhase = 'cooldown';
-        laserPhaseT = LASER_CD_S;
-        updateLaserCannons._acc = 0;
-      }
     } else if (laserPhase === 'cooldown') {
+      laserPhaseT -= dt;
       if (Math.random() < Math.min(1, dt * 8)) {
         for (const x of cannonXs()) {
           spawnCannonSmoke(x, paddle.y + paddle.h * 0.18);
@@ -2863,6 +2868,7 @@
       }
       if (laserPhaseT <= 0) {
         laserPhase = 'fire';
+        laserFireUntil = performance.now() + LASER_FIRE_S * 1000;
         laserPhaseT = LASER_FIRE_S;
         for (const x of cannonXs()) {
           spawnDust(x, paddle.y - 20, 'rgb(120,220,255)', 12, {
