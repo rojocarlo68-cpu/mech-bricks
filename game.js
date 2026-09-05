@@ -56,7 +56,7 @@
   let brickLayer = null;
   let paddle, ball;
   let running = false, launched = false, gameOver = false, won = false;
-  let score = 0, lives = START_LIVES, aliveCount = 0;
+  let score = 26000, lives = START_LIVES, aliveCount = 0; // TEMP test balls
   let pointerX = null;
   let lastTs = 0;
   let particles = [];
