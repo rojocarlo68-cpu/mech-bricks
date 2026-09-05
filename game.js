@@ -18,6 +18,7 @@
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
     { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
     { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', bgC: 'bg-level6c.jpg', waves: 3, paddleScale: 0.8846, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.0404, brickDamageMult: 1.2 },
+    { id: 7, name: 'Nivel 7', mech: 'mech-level7-upper.png', mechLower: 'mech-level7-lower.png', bg: 'bg-level7.jpg', dualLayer: true, irregularBricks: true, mechScale: 0.62, paddleScale: 0.86, groundFrac: 0.88, dodge: true, ballSpeed: 1.05, brickDamageMult: 1.25 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -56,8 +57,16 @@
   let originX = 0, originY = 0;
   let groundY = 0;
   let brickLayer = null;
+  let brickLayerLower = null;
+  let brickLayerUpper = null;
+  let gridLower = null;
+  let gridUpper = null;
+  let imgDataLower = null;
+  let imgDataUpper = null;
   let paddle, ball;
   let running = false, launched = false, gameOver = false, won = false;
+  let ballStallT = 0;
+  let ballLastAng = -Math.PI / 2;
   let score = 26000, lives = START_LIVES, aliveCount = 0; // TEMP test balls
   let pointerX = null;
   let lastTs = 0;
@@ -201,7 +210,78 @@
     });
   }
 
+  function loadImageDataFromImg(img) {
+    const maxSide = 900;
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+    const off = document.createElement('canvas');
+    off.width = w; off.height = h;
+    const c = off.getContext('2d', { willReadFrequently: true });
+    c.drawImage(img, 0, 0, w, h);
+    return { data: c.getImageData(0, 0, w, h).data, w, h, canvas: off };
+  }
+
+  function loadImg(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  /** Align lower+upper mech art onto identical canvases (center X, feet on bottom). */
+  async function loadDualMech(lowerSrc, upperSrc) {
+    const [imgL, imgU] = await Promise.all([loadImg(lowerSrc), loadImg(upperSrc)]);
+    const L = loadImageDataFromImg(imgL);
+    const U = loadImageDataFromImg(imgU);
+    const th = Math.max(L.h, U.h);
+    function scaleToH(srcCanvas, tw, thSrc, thDst) {
+      const r = thDst / thSrc;
+      const nw = Math.max(1, Math.round(tw * r));
+      const off = document.createElement('canvas');
+      off.width = nw; off.height = thDst;
+      off.getContext('2d').drawImage(srcCanvas, 0, 0, nw, thDst);
+      return off;
+    }
+    const lScaled = scaleToH(L.canvas, L.w, L.h, th);
+    const uScaled = scaleToH(U.canvas, U.w, U.h, th);
+    const cw = Math.max(lScaled.width, uScaled.width);
+    const ch = th;
+    function pasteCentered(src) {
+      const off = document.createElement('canvas');
+      off.width = cw; off.height = ch;
+      const c = off.getContext('2d', { willReadFrequently: true });
+      const x = ((cw - src.width) / 2) | 0;
+      const y = ch - src.height;
+      c.clearRect(0, 0, cw, ch);
+      c.drawImage(src, x, y);
+      return { data: c.getImageData(0, 0, cw, ch).data, w: cw, h: ch };
+    }
+    const lower = pasteCentered(lScaled);
+    const upper = pasteCentered(uScaled);
+    imgDataLower = lower.data;
+    imgDataUpper = upper.data;
+    imgW = cw; imgH = ch;
+    imgData = imgDataUpper;
+    gridLower = null;
+    gridUpper = null;
+    brickLayerLower = null;
+    brickLayerUpper = null;
+  }
+
   function loadImage() {
+    if (level().dualLayer && level().mechLower) {
+      return loadDualMech(level().mechLower, level().mech);
+    }
+    imgDataLower = null;
+    imgDataUpper = null;
+    gridLower = null;
+    gridUpper = null;
+    brickLayerLower = null;
+    brickLayerUpper = null;
     return loadMechSrc(level().mech);
   }
 
@@ -228,8 +308,18 @@
     return `rgb(${(m[1] * factor) | 0},${(m[2] * factor) | 0},${(m[3] * factor) | 0})`;
   }
 
+  function brickLayerCanvasFor(br) {
+    if (level().dualLayer) {
+      if (br.layer === 'lower' && brickLayerLower) return brickLayerLower;
+      if (br.layer === 'upper' && brickLayerUpper) return brickLayerUpper;
+    }
+    return brickLayer;
+  }
+
   function drawBrickToLayer(br) {
-    const lctx = brickLayer.getContext('2d');
+    const layerCanvas = brickLayerCanvasFor(br);
+    if (!layerCanvas) return;
+    const lctx = layerCanvas.getContext('2d');
     // La capa estática usa coords base (sin dodge)
     const lx = br.baseX != null ? br.baseX : br.x;
     const ly = br.baseY != null ? br.baseY : br.y;
@@ -287,10 +377,12 @@
   }
 
   function stickBallToPaddle() {
+    if (!ball || !paddle) return;
     ball.x = paddle.x + paddle.w / 2;
     ball.y = paddle.y - ball.r - 2;
     ball.vx = 0;
     ball.vy = 0;
+    ballStallT = 0;
   }
 
   function activePaddleImg() {
@@ -363,6 +455,13 @@
   }
 
   function startLaserCannons() {
+    // Never reset ball when equipping laser mid-flight
+    const keepLaunched = !!launched;
+    const kvx = ball ? ball.vx : 0;
+    const kvy = ball ? ball.vy : 0;
+    const ksp = ball ? ball.speed : 0;
+    const kx = ball ? ball.x : 0;
+    const ky = ball ? ball.y : 0;
     laserCannonsActive = true;
     // Espera a salir de pausa, luego 1s de calentamiento, luego dispara 1s
     laserAwaitUnpause = true;
@@ -375,6 +474,18 @@
       paddle.y = H - 28 - paddle.h;
       paddle.x = Math.max(6, Math.min(W - paddle.w - 6, cx - paddle.w / 2));
     }
+    if (ball) {
+      if (keepLaunched) {
+        launched = true;
+        ball.x = kx;
+        ball.y = ky;
+        ball.vx = kvx;
+        ball.vy = kvy;
+        ball.speed = ksp;
+      } else {
+        stickBallToPaddle();
+      }
+    }
     updateLaserCdUi();
   }
 
@@ -382,11 +493,19 @@
     return br.cells || [{ ix: br.ix, iy: br.iy }];
   }
 
+  function gridForBrick(br) {
+    if (br && br.layer === 'lower' && gridLower) return gridLower;
+    if (br && br.layer === 'upper' && gridUpper) return gridUpper;
+    return grid;
+  }
+
   function clearBrickGrid(br, id) {
-    if (br.panel || !grid) return;
+    if (br.panel) return;
+    const g = gridForBrick(br);
+    if (!g) return;
     for (const c of brickCells(br)) {
       const gi = c.iy * cols + c.ix;
-      if (grid[gi] === id) grid[gi] = -1;
+      if (g[gi] === id) g[gi] = -1;
     }
   }
 
@@ -398,14 +517,17 @@
     const dirs = orthoOnly
       ? [[1,0],[-1,0],[0,1],[0,-1]]
       : [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const g = gridForBrick(br) || grid;
     const seen = Object.create(null);
     for (const c of brickCells(br)) {
       for (let d = 0; d < dirs.length; d++) {
         const nix = c.ix + dirs[d][0];
         const niy = c.iy + dirs[d][1];
         if (nix < 0 || niy < 0 || nix >= cols || niy >= rows) continue;
-        const id = grid[niy * cols + nix];
+        const id = g[niy * cols + nix];
         if (id < 0 || seen[id]) continue;
+        // Dual-layer: never treat opposite layer as structural neighbor
+        if (br.layer && bricks[id] && bricks[id].layer && bricks[id].layer !== br.layer) continue;
         seen[id] = 1;
         fn(id);
       }
@@ -522,10 +644,19 @@
       const br = bricks[i];
       if (br.alive && !br.falling && !br.settled) localCount++;
     }
-    // Colapso masivo: ≤30% de la estructura inicial → todo cae (por estructura)
-    if (localCount > 0 && structureStartCount > 0 && localCount <= structureStartCount * 0.30) {
+    // Colapso masivo: ≤30% de la estructura inicial → todo cae (por estructura / capa)
+    const collapseLayer = (layerName, startCount) => {
+      if (!(startCount > 0)) return;
+      let live = 0;
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
+        if (layerName && br.layer !== layerName) continue;
+        if (br.alive && !br.falling && !br.settled) live++;
+      }
+      if (live <= 0 || live > startCount * 0.30) return;
+      for (let i = 0; i < n; i++) {
+        const br = bricks[i];
+        if (layerName && br.layer !== layerName) continue;
         if (!br.alive || br.falling || br.settled) continue;
         clearBrickGrid(br, i);
         br.falling = true;
@@ -534,7 +665,18 @@
         drawBrickToLayer(br);
         detached++;
       }
-      localCount = 0;
+    };
+    if (level().dualLayer) {
+      const ds = window.__dualStart || {};
+      collapseLayer('lower', ds.lower || 0);
+      collapseLayer('upper', ds.upper || 0);
+    } else if (localCount > 0 && structureStartCount > 0 && localCount <= structureStartCount * 0.30) {
+      collapseLayer(null, structureStartCount);
+    }
+    localCount = 0;
+    for (let i = 0; i < n; i++) {
+      const br = bricks[i];
+      if (br.alive && !br.falling && !br.settled) localCount++;
     }
     if (structures.length) {
       for (const S of structures) {
@@ -1716,6 +1858,86 @@
     groundY += 0.5;
   }
 
+  function makeBrickLayerCanvas() {
+    const c = document.createElement('canvas');
+    c.width = Math.floor(W * dpr);
+    c.height = Math.floor(H * dpr);
+    const lctx = c.getContext('2d');
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lctx.clearRect(0, 0, W, H);
+    return c;
+  }
+
+  /** Build irregular brick field from current imgData into a pack (does not touch paddle/ball). */
+  function materializeBricksFromImgData(fit, ox, oy, layerTag, cellOverride) {
+    originX = ox;
+    originY = oy;
+    fitScale = fit;
+    cell = cellOverride != null ? cellOverride : pickCell();
+    cols = Math.ceil(imgW / cell);
+    rows = Math.ceil(imgH / cell);
+    cellScreen = cell * fit;
+    brickPx = Math.max(3.5, cellScreen + (level().fly ? 1.35 : 1.0));
+    grid = new Int32Array(cols * rows);
+    grid.fill(-1);
+    bricks = [];
+    minIy = rows;
+    maxIy = 0;
+    groundY = 0;
+
+    for (let iy = 0; iy < rows; iy++) {
+      for (let ix = 0; ix < cols; ix++) {
+        if (bricks.length >= MAX_BRICKS) break;
+        const c = avgCell(ix, iy, cell);
+        if (!c) continue;
+        minIy = Math.min(minIy, iy);
+        maxIy = Math.max(maxIy, iy);
+        const maxHp = 1;
+        const bx = originX + ix * cellScreen;
+        const by = originY + iy * cellScreen;
+        const br = {
+          ix, iy,
+          baseX: bx,
+          baseY: by,
+          x: bx,
+          y: by,
+          w: brickPx,
+          h: brickPx,
+          color: `rgb(${c.r},${c.g},${c.b})`,
+          hp: maxHp,
+          maxHp,
+          alive: true,
+          falling: false,
+          settled: false,
+          vx: 0,
+          vy: 0,
+          layer: layerTag || null,
+        };
+        groundY = Math.max(groundY, br.y + br.h);
+        grid[iy * cols + ix] = bricks.length;
+        bricks.push(br);
+      }
+    }
+    groundY += 0.5;
+    if (level().irregularBricks) mergeIrregularBricks();
+    if (layerTag) {
+      for (const br of bricks) br.layer = layerTag;
+    }
+    const layerCanvas = makeBrickLayerCanvas();
+    brickLayer = layerCanvas;
+    for (const br of bricks) drawBrickToLayer(br);
+    return {
+      bricks: bricks.slice(),
+      grid,
+      cols, rows, cell, cellScreen, brickPx,
+      originX, originY, fitScale,
+      groundY, minIy, maxIy,
+      brickLayer: layerCanvas,
+      structureCount: bricks.length,
+      structureStartCount: bricks.length,
+    };
+  }
+
   function buildLevel() {
     resizeCanvas();
     clearL6Timers();
@@ -1760,8 +1982,56 @@
 
     bricks = [];
     groundY = 0;
+    gridLower = null;
+    gridUpper = null;
+    brickLayerLower = null;
+    brickLayerUpper = null;
 
-    if (level().panels) {
+    if (level().dualLayer && imgDataLower && imgDataUpper) {
+      // ONE body, two layers — shared origin/fit/transform/cell forever
+      imgData = imgDataLower;
+      const sharedCell = pickCell();
+      imgData = imgDataUpper;
+      const cellU = pickCell();
+      // denser layer wins so both stay ≥ MIN_BRICKS when possible
+      const dualCell = Math.min(sharedCell, cellU);
+      imgData = imgDataLower;
+      const lowerPack = materializeBricksFromImgData(fit, originX, originY, 'lower', dualCell);
+      imgData = imgDataUpper;
+      const upperPack = materializeBricksFromImgData(fit, originX, originY, 'upper', dualCell);
+
+      // Shared grid metrics (both packs use same canvas size / cell)
+      cols = upperPack.cols;
+      rows = upperPack.rows;
+      cell = upperPack.cell;
+      cellScreen = upperPack.cellScreen;
+      brickPx = upperPack.brickPx;
+      originX = upperPack.originX;
+      originY = upperPack.originY;
+      fitScale = upperPack.fitScale;
+      minIy = Math.min(lowerPack.minIy, upperPack.minIy);
+      maxIy = Math.max(lowerPack.maxIy, upperPack.maxIy);
+      groundY = Math.max(lowerPack.groundY, upperPack.groundY);
+
+      const lowerBricks = lowerPack.bricks;
+      const upperBricks = upperPack.bricks;
+      const offset = lowerBricks.length;
+      // Remap upper grid ids into combined bricks array
+      const ug = new Int32Array(upperPack.grid.length);
+      for (let i = 0; i < upperPack.grid.length; i++) {
+        const id = upperPack.grid[i];
+        ug[i] = id < 0 ? -1 : id + offset;
+      }
+      gridLower = lowerPack.grid;
+      gridUpper = ug;
+      grid = gridUpper;
+      bricks = lowerBricks.concat(upperBricks);
+      brickLayerLower = lowerPack.brickLayer;
+      brickLayerUpper = upperPack.brickLayer;
+      brickLayer = brickLayerUpper;
+      // Redraw both layers into their canvases with final brick refs
+      for (const br of bricks) drawBrickToLayer(br);
+    } else if (level().panels) {
       cell = Math.max(2, Math.floor(Math.min(imgW, imgH) / 180));
       cols = Math.ceil(imgW / cell);
       rows = Math.ceil(imgH / cell);
@@ -1772,66 +2042,32 @@
       minIy = rows;
       maxIy = 0;
       buildPanels(fit);
+      brickLayer = makeBrickLayerCanvas();
+      for (const br of bricks) drawBrickToLayer(br);
     } else {
-      cell = pickCell();
-      cols = Math.ceil(imgW / cell);
-      rows = Math.ceil(imgH / cell);
-      cellScreen = cell * fit;
-      // Cubrir todo el grid sin huecos al fondo
-      brickPx = Math.max(3.5, cellScreen + (level().fly ? 1.35 : 1.0));
-      grid = new Int32Array(cols * rows);
-      grid.fill(-1);
-      minIy = rows;
-      maxIy = 0;
-
-      for (let iy = 0; iy < rows; iy++) {
-        for (let ix = 0; ix < cols; ix++) {
-          if (bricks.length >= MAX_BRICKS) break;
-          const c = avgCell(ix, iy, cell);
-          if (!c) continue;
-          minIy = Math.min(minIy, iy);
-          maxIy = Math.max(maxIy, iy);
-          const maxHp = 1; // 1 golpe
-          const bx = originX + ix * cellScreen;
-          const by = originY + iy * cellScreen;
-          const br = {
-            ix, iy,
-            baseX: bx,
-            baseY: by,
-            x: bx,
-            y: by,
-            w: brickPx,
-            h: brickPx,
-            color: `rgb(${c.r},${c.g},${c.b})`,
-            hp: maxHp,
-            maxHp,
-            alive: true,
-            falling: false,
-            settled: false,
-            vx: 0,
-            vy: 0,
-          };
-          groundY = Math.max(groundY, br.y + br.h);
-          grid[iy * cols + ix] = bricks.length;
-          bricks.push(br);
-        }
-      }
-      // Suelo justo bajo los pies
-      groundY += 0.5;
-      if (level().irregularBricks) mergeIrregularBricks();
+      const pack = materializeBricksFromImgData(fit, originX, originY, null);
+      bricks = pack.bricks;
+      grid = pack.grid;
+      cols = pack.cols; rows = pack.rows; cell = pack.cell;
+      cellScreen = pack.cellScreen; brickPx = pack.brickPx;
+      originX = pack.originX; originY = pack.originY; fitScale = pack.fitScale;
+      groundY = pack.groundY; minIy = pack.minIy; maxIy = pack.maxIy;
+      brickLayer = pack.brickLayer;
     }
-
-    brickLayer = document.createElement('canvas');
-    brickLayer.width = Math.floor(W * dpr);
-    brickLayer.height = Math.floor(H * dpr);
-    const lctx = brickLayer.getContext('2d');
-    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    lctx.clearRect(0, 0, W, H);
-    for (const br of bricks) drawBrickToLayer(br);
 
     structureCount = bricks.length;
     structureStartCount = structureCount;
     aliveCount = bricks.length;
+    if (level().dualLayer) {
+      let lo = 0, up = 0;
+      for (const br of bricks) {
+        if (br.layer === 'lower') lo++;
+        else if (br.layer === 'upper') up++;
+      }
+      window.__dualStart = { lower: lo, upper: up };
+    } else {
+      window.__dualStart = null;
+    }
     particles = [];
     bombs = [];
     playerBomb = null;
@@ -1986,8 +2222,13 @@
     launched = true;
     hint.classList.remove('show');
     const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.65;
+    if (!(ball.speed > 0.5)) {
+      ball.speed = Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult();
+    }
     ball.vx = Math.cos(angle) * ball.speed;
     ball.vy = Math.sin(angle) * ball.speed;
+    ballLastAng = angle;
+    ballStallT = 0;
   }
 
   function resetDamageFX() {
@@ -2236,9 +2477,13 @@
     br.alive = false;
     br.falling = false;
     if (wasStructure) {
-      if (!br.panel && grid) {
-        const gi = br.iy * cols + br.ix;
-        const id = (gi >= 0 && gi < grid.length) ? grid[gi] : -1;
+      if (!br.panel) {
+        const g = gridForBrick(br);
+        let id = -1;
+        if (g) {
+          const gi = br.iy * cols + br.ix;
+          id = (gi >= 0 && gi < g.length) ? g[gi] : -1;
+        }
         clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
       }
     }
@@ -2269,17 +2514,21 @@
       updateHud();
     }
     const sp = Math.hypot(ball.vx, ball.vy);
-    const boost = Math.min(6.8, sp * 1.002); // nivel 1: ramp suave
-    const ang = Math.atan2(ball.vy, ball.vx);
+    const minSp = Math.max(3.2, ball.speed || 0);
+    const ang = sp > 0.05 ? Math.atan2(ball.vy, ball.vx) : (ballLastAng || -Math.PI / 2);
+    const boost = Math.min(6.8, Math.max(minSp, sp) * (sp > 0.05 ? 1.002 : 1));
     ball.vx = Math.cos(ang) * boost;
     ball.vy = Math.sin(ang) * boost;
     ball.speed = boost;
+    ballLastAng = ang;
+    ballStallT = 0;
   }
 
   function explodeAtOnCurrent(x, y, R, pts, r2) {
     const hitList = [];
     for (const br of bricks) {
       if (!br.alive || br.settled) continue;
+      if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
       const cx = br.x + br.w / 2;
       const cy = br.y + br.h / 2;
       const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
@@ -2290,9 +2539,13 @@
       const wasStructure = !br.falling;
       br.alive = false;
       br.falling = false;
-      if (wasStructure && !br.panel && grid) {
-        const gi = br.iy * cols + br.ix;
-        const id = (gi >= 0 && gi < grid.length) ? grid[gi] : -1;
+      if (wasStructure && !br.panel) {
+        const g = gridForBrick(br);
+        let id = -1;
+        if (g) {
+          const gi = br.iy * cols + br.ix;
+          id = (gi >= 0 && gi < g.length) ? g[gi] : -1;
+        }
         clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
       }
       score += pts;
@@ -2362,6 +2615,41 @@
     return { bounceX: false, bounceY: true };
   }
 
+  function aabbOverlapBricks(a, b) {
+    return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
+  }
+
+  /** Lower brick is blocked while any overlapping alive upper brick covers it. */
+  function isLowerCoveredByUpper(br) {
+    if (!br || br.layer !== 'lower' || !level().dualLayer || !gridUpper) return false;
+    const cells = brickCells(br);
+    for (const c of cells) {
+      if (c.iy < 0 || c.ix < 0 || c.iy >= rows || c.ix >= cols) continue;
+      const id = gridUpper[c.iy * cols + c.ix];
+      if (id < 0) continue;
+      const ub = bricks[id];
+      if (!ub || !ub.alive || ub.falling || ub.settled) continue;
+      return true; // same covering cell
+    }
+    // Irregular AABB: check a small neighborhood of upper grid cells
+    const ox = originX + structureDX;
+    const oy = originY + structureDY;
+    const ix0 = Math.max(0, Math.floor((br.x - ox) / cellScreen) - 1);
+    const iy0 = Math.max(0, Math.floor((br.y - oy) / cellScreen) - 1);
+    const ix1 = Math.min(cols - 1, Math.floor((br.x + br.w - ox) / cellScreen) + 1);
+    const iy1 = Math.min(rows - 1, Math.floor((br.y + br.h - oy) / cellScreen) + 1);
+    for (let iy = iy0; iy <= iy1; iy++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const id = gridUpper[iy * cols + ix];
+        if (id < 0) continue;
+        const ub = bricks[id];
+        if (!ub || !ub.alive || ub.falling || ub.settled) continue;
+        if (aabbOverlapBricks(br, ub)) return true;
+      }
+    }
+    return false;
+  }
+
   function collideBricksWithBallOnCurrent() {
     let hit = null;
     let bounceX = false;
@@ -2371,12 +2659,14 @@
       for (let i = 0; i < bricks.length; i++) {
         const br = bricks[i];
         if (!br.alive || br.falling || br.settled) continue;
+        if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
         if (!collideCircleAABB(ball.x, ball.y, ball.r, br)) continue;
+        if (hit && hit.layer === 'upper' && br.layer === 'lower') continue;
         hit = br;
         const flags = bounceFlagsForHit(ball.x, ball.y, ball.r, br);
         bounceX = flags.bounceX;
         bounceY = flags.bounceY;
-        break;
+        if (br.layer === 'upper') break;
       }
     } else {
       let ox, oy, lx, ly;
@@ -2393,23 +2683,41 @@
       const ix1 = Math.floor((lx + ball.r - ox) / cellScreen) + 1;
       const iy1 = Math.floor((ly + ball.r - oy) / cellScreen) + 1;
 
+      const gridsToScan = (level().dualLayer && gridUpper && gridLower)
+        ? [gridUpper, gridLower]
+        : [grid];
+
+      for (const scanGrid of gridsToScan) {
       for (let iy = iy0; iy <= iy1; iy++) {
         if (iy < 0 || iy >= rows) continue;
         for (let ix = ix0; ix <= ix1; ix++) {
           if (ix < 0 || ix >= cols) continue;
-          const id = grid[iy * cols + ix];
+          const id = scanGrid[iy * cols + ix];
           if (id < 0) continue;
           const br = bricks[id];
           if (!br.alive || br.falling || br.settled) continue;
           if (!collideCircleAABB(ball.x, ball.y, ball.r, br)) continue;
+          if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
 
+          // Prefer upper-layer hits when both could register
+          if (hit && hit.layer === 'upper' && br.layer === 'lower') continue;
+          if (!hit || (br.layer === 'upper' && hit.layer === 'lower')) {
+            hit = br;
+            const flags = bounceFlagsForHit(ball.x, ball.y, ball.r, br);
+            bounceX = flags.bounceX;
+            bounceY = flags.bounceY;
+            if (br.layer === 'upper') break;
+            continue;
+          }
           hit = br;
           const flags = bounceFlagsForHit(ball.x, ball.y, ball.r, br);
           bounceX = flags.bounceX;
           bounceY = flags.bounceY;
           break;
         }
-        if (hit) break;
+        if (hit && hit.layer === 'upper') break;
+      }
+      if (hit && hit.layer === 'upper') break;
       }
     }
 
@@ -3246,9 +3554,12 @@
         ball.y = paddle.y - ball.r - 0.5;
         const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
         const ang = -Math.PI / 2 + Math.max(-1, Math.min(1, hit)) * 1.05;
-        const sp = Math.max(ball.speed, Math.hypot(ball.vx, ball.vy));
+        const sp = Math.max(ball.speed || 0, Math.hypot(ball.vx, ball.vy), 3.2);
         ball.vx = Math.cos(ang) * sp;
         ball.vy = Math.sin(ang) * sp;
+        ball.speed = Math.max(ball.speed || 0, sp);
+        ballLastAng = ang;
+        ballStallT = 0;
         spawnMetalSparks(ball.x, paddle.y);
       }
 
@@ -3257,6 +3568,24 @@
       if (ball.y - ball.r > H + 4) {
         loseLife();
         return;
+      }
+    }
+
+    // Safety: launched ball must never stay frozen (laser equip / pause glitches)
+    const spdNow = Math.hypot(ball.vx, ball.vy);
+    if (spdNow > 0.2) {
+      ballLastAng = Math.atan2(ball.vy, ball.vx);
+      ballStallT = 0;
+      if (ball.speed < spdNow) ball.speed = spdNow;
+    } else if (launched && !gameOver && !won && outro !== 'slowmo') {
+      ballStallT += dt;
+      if (ballStallT > 0.2) {
+        const restore = Math.max(ball.speed || 0, 3.6) * levelBallSpeedMult();
+        const ang = ballLastAng || -Math.PI / 2;
+        ball.speed = restore;
+        ball.vx = Math.cos(ang) * restore;
+        ball.vy = Math.sin(ang) * restore;
+        ballStallT = 0;
       }
     }
     updateBallAirTrail(dt);
@@ -3418,6 +3747,7 @@
         for (let i = 0; i < bricks.length; i++) {
           const br = bricks[i];
           if (!br.alive || br.falling || br.settled) continue;
+          if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
           if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
         }
         return false;
@@ -3435,15 +3765,21 @@
       const iy0 = Math.floor((ly - b.r - oy) / cellScreen) - 1;
       const ix1 = Math.floor((lx + b.r - ox) / cellScreen) + 1;
       const iy1 = Math.floor((ly + b.r - oy) / cellScreen) + 1;
-      for (let iy = iy0; iy <= iy1; iy++) {
-        if (iy < 0 || iy >= rows) continue;
-        for (let ix = ix0; ix <= ix1; ix++) {
-          if (ix < 0 || ix >= cols) continue;
-          const id = grid[iy * cols + ix];
-          if (id < 0) continue;
-          const br = bricks[id];
-          if (!br.alive || br.falling || br.settled) continue;
-          if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
+      const gridsToScan = (level().dualLayer && gridUpper && gridLower)
+        ? [gridUpper, gridLower]
+        : [grid];
+      for (const scanGrid of gridsToScan) {
+        for (let iy = iy0; iy <= iy1; iy++) {
+          if (iy < 0 || iy >= rows) continue;
+          for (let ix = ix0; ix <= ix1; ix++) {
+            if (ix < 0 || ix >= cols) continue;
+            const id = scanGrid[iy * cols + ix];
+            if (id < 0) continue;
+            const br = bricks[id];
+            if (!br.alive || br.falling || br.settled) continue;
+            if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+            if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
+          }
         }
       }
       return false;
@@ -3732,8 +4068,8 @@
     camShake = Math.min(18, camShake + amount * 1.3);
   }
 
-  function drawStructureLayer() {
-    if (!brickLayer) return;
+  function drawOneBrickLayer(layerCanvas) {
+    if (!layerCanvas) return;
     const flying = !!level().fly;
     if (flying && (structureDX || structureDY || structureAngle)) {
       const { cx0, cy0, cx, cy } = structureCenters();
@@ -3741,16 +4077,26 @@
       ctx.translate(cx, cy);
       ctx.rotate(structureAngle);
       ctx.translate(-cx0, -cy0);
-      ctx.drawImage(brickLayer, 0, 0, W, H);
+      ctx.drawImage(layerCanvas, 0, 0, W, H);
       ctx.restore();
     } else if (structureDX || structureDY) {
       ctx.save();
       ctx.translate(structureDX, structureDY);
-      ctx.drawImage(brickLayer, 0, 0, W, H);
+      ctx.drawImage(layerCanvas, 0, 0, W, H);
       ctx.restore();
     } else {
-      ctx.drawImage(brickLayer, 0, 0, W, H);
+      ctx.drawImage(layerCanvas, 0, 0, W, H);
     }
+  }
+
+  function drawStructureLayer() {
+    if (level().dualLayer && (brickLayerLower || brickLayerUpper)) {
+      // Lower first, upper on top — same transform
+      drawOneBrickLayer(brickLayerLower);
+      drawOneBrickLayer(brickLayerUpper);
+      return;
+    }
+    drawOneBrickLayer(brickLayer);
   }
 
   function draw() {
@@ -4109,12 +4455,24 @@
       hint.classList.add('show');
       hint.innerHTML = '<strong>💣 Bomba lista</strong><span>Bomba lista · toca el botón arriba</span>';
     } else if (id === 'laser') {
+      const keepL = !!launched;
+      const kvx = ball ? ball.vx : 0, kvy = ball ? ball.vy : 0;
+      const ksp = ball ? ball.speed : 0, kx = ball ? ball.x : 0, ky = ball ? ball.y : 0;
       startLaserCannons();
       closeAllMenus();
       setPauseBtn(false);
       setShopBtn(false);
       setPackBtn(false);
       beginLaserWarmup();
+      if (ball && keepL) {
+        launched = true;
+        ball.x = kx; ball.y = ky;
+        ball.vx = kvx; ball.vy = kvy;
+        ball.speed = ksp;
+        ballStallT = 0;
+      } else if (ball && !keepL) {
+        stickBallToPaddle();
+      }
       hint.classList.add('show');
       hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>Listos en 1s · ráfaga 1s · CD 7s</span>';
     } else if (id === 'ballskin' || id === 'ballsilbadora') {
@@ -4134,32 +4492,35 @@
 
   function burnLaserColumnOnCurrent(x) {
     const half = Math.max(brickPx * 1.0, 8);
+    const tryBurn = (br) => {
+      if (!br.alive || br.falling || br.settled) return;
+      if (br.layer === 'lower' && isLowerCoveredByUpper(br)) return;
+      if (br.y + br.h < 0 || br.y >= paddle.y) return;
+      const cx = br.x + br.w / 2;
+      if (Math.abs(cx - x) > half && (br.x > x + half || br.x + br.w < x - half)) return;
+      if (Math.abs(cx - x) > half) return;
+      spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
+      destroyBrick(br, 1);
+    };
     if (level().panels) {
-      for (let i = 0; i < bricks.length; i++) {
-        const br = bricks[i];
-        if (!br.alive || br.falling || br.settled) continue;
-        if (br.y + br.h < 0 || br.y >= paddle.y) continue;
-        if (br.x > x + half || br.x + br.w < x - half) continue;
-        const cx = br.x + br.w / 2;
-        spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
-        destroyBrick(br, 1);
-      }
+      for (let i = 0; i < bricks.length; i++) tryBurn(bricks[i]);
       return;
     }
     const ox = originX + structureDX;
     const ix0 = Math.max(0, Math.floor((x - half - ox) / cellScreen) - 1);
     const ix1 = Math.min(cols - 1, Math.floor((x + half - ox) / cellScreen) + 1);
-    for (let iy = 0; iy < rows; iy++) {
-      for (let ix = ix0; ix <= ix1; ix++) {
-        const id = grid[iy * cols + ix];
-        if (id < 0) continue;
-        const br = bricks[id];
-        if (!br.alive || br.falling || br.settled) continue;
-        const cx = br.x + br.w / 2;
-        if (Math.abs(cx - x) > half) continue;
-        if (br.y + br.h < 0 || br.y >= paddle.y) continue;
-        spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
-        destroyBrick(br, 1);
+    const gridsToScan = (level().dualLayer && gridUpper && gridLower)
+      ? [gridUpper, gridLower]
+      : [grid];
+    const seen = new Set();
+    for (const scanGrid of gridsToScan) {
+      for (let iy = 0; iy < rows; iy++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const id = scanGrid[iy * cols + ix];
+          if (id < 0 || seen.has(id)) continue;
+          seen.add(id);
+          tryBurn(bricks[id]);
+        }
       }
     }
   }
