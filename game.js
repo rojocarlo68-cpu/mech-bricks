@@ -90,6 +90,8 @@
   let structureDVX = 0;
   let structureDY = 0;
   let structureDVY = 0;
+  let structureAngle = 0; // rad — tilt/yaw for fly mechs
+  let structureAV = 0;    // angular velocity
   let playerBombArmed = false;
   let playerBomb = null;
   let fitScale = 1;
@@ -951,6 +953,8 @@
     structureDVX = 0;
     structureDY = 0;
     structureDVY = 0;
+    structureAngle = 0;
+    structureAV = 0;
 
     bricks = [];
     groundY = 0;
@@ -1359,12 +1363,19 @@
         break;
       }
     } else {
-      const ox = originX + structureDX;
-      const oy = originY + structureDY;
-      const ix0 = Math.floor((ball.x - ball.r - ox) / cellScreen) - 1;
-      const iy0 = Math.floor((ball.y - ball.r - oy) / cellScreen) - 1;
-      const ix1 = Math.floor((ball.x + ball.r - ox) / cellScreen) + 1;
-      const iy1 = Math.floor((ball.y + ball.r - oy) / cellScreen) + 1;
+      let ox, oy, lx, ly;
+      if (level().fly) {
+        const g = ballToStructureGrid(ball.x, ball.y);
+        ox = g.ox; oy = g.oy; lx = g.x; ly = g.y;
+      } else {
+        ox = originX + structureDX;
+        oy = originY + structureDY;
+        lx = ball.x; ly = ball.y;
+      }
+      const ix0 = Math.floor((lx - ball.r - ox) / cellScreen) - 1;
+      const iy0 = Math.floor((ly - ball.r - oy) / cellScreen) - 1;
+      const ix1 = Math.floor((lx + ball.r - ox) / cellScreen) + 1;
+      const iy1 = Math.floor((ly + ball.r - oy) / cellScreen) + 1;
 
       for (let iy = iy0; iy <= iy1; iy++) {
         if (iy < 0 || iy >= rows) continue;
@@ -1436,12 +1447,19 @@
             }
           }
         } else {
-          const ox = originX + structureDX;
-          const oy = originY + structureDY;
-          const ix0 = Math.floor((b.x - b.r - ox) / cellScreen) - 1;
-          const iy0 = Math.floor((b.y - b.r - oy) / cellScreen) - 1;
-          const ix1 = Math.floor((b.x + b.r - ox) / cellScreen) + 1;
-          const iy1 = Math.floor((b.y + b.r - oy) / cellScreen) + 1;
+          let ox, oy, lx, ly;
+          if (level().fly) {
+            const g = ballToStructureGrid(b.x, b.y);
+            ox = g.ox; oy = g.oy; lx = g.x; ly = g.y;
+          } else {
+            ox = originX + structureDX;
+            oy = originY + structureDY;
+            lx = b.x; ly = b.y;
+          }
+          const ix0 = Math.floor((lx - b.r - ox) / cellScreen) - 1;
+          const iy0 = Math.floor((ly - b.r - oy) / cellScreen) - 1;
+          const ix1 = Math.floor((lx + b.r - ox) / cellScreen) + 1;
+          const iy1 = Math.floor((ly + b.r - oy) / cellScreen) + 1;
           for (let iy = iy0; iy <= iy1 && !struck; iy++) {
             if (iy < 0 || iy >= rows) continue;
             for (let ix = ix0; ix <= ix1; ix++) {
@@ -1539,11 +1557,46 @@
   }
 
 
+  function structureCenters() {
+    const cx0 = originX + (imgW * fitScale) / 2;
+    const cy0 = originY + (imgH * fitScale) / 2;
+    return { cx0, cy0, cx: cx0 + structureDX, cy: cy0 + structureDY };
+  }
+
+  /** Local (unrotated, no DX/DY) coords for grid lookup when fly mech is tilted. */
+  function ballToStructureGrid(ballX, ballY) {
+    const { cx0, cy0, cx, cy } = structureCenters();
+    const dx = ballX - cx;
+    const dy = ballY - cy;
+    const cos = Math.cos(structureAngle);
+    const sin = Math.sin(structureAngle);
+    // inverse rotate around structure center, then express in origin (no DX/DY) space
+    const lx = dx * cos + dy * sin;
+    const ly = -dx * sin + dy * cos;
+    return { ox: originX, oy: originY, x: lx + cx0, y: ly + cy0 };
+  }
+
   function applyStructureOffset() {
-    for (const br of bricks) {
-      if (!br.alive || br.falling || br.settled) continue;
-      br.x = br.baseX + structureDX;
-      br.y = br.baseY + structureDY;
+    const flying = !!level().fly;
+    if (flying) {
+      const { cx0, cy0, cx, cy } = structureCenters();
+      const cos = Math.cos(structureAngle);
+      const sin = Math.sin(structureAngle);
+      for (const br of bricks) {
+        if (!br.alive || br.falling || br.settled) continue;
+        const lx = br.baseX + br.w / 2 - cx0;
+        const ly = br.baseY + br.h / 2 - cy0;
+        const wx = cx + lx * cos - ly * sin;
+        const wy = cy + lx * sin + ly * cos;
+        br.x = wx - br.w / 2;
+        br.y = wy - br.h / 2;
+      }
+    } else {
+      for (const br of bricks) {
+        if (!br.alive || br.falling || br.settled) continue;
+        br.x = br.baseX + structureDX;
+        br.y = br.baseY + structureDY;
+      }
     }
   }
 
@@ -1552,6 +1605,8 @@
     if (!canMove || !launched || gameOver || won || outro) {
       structureDVX *= 0.9;
       structureDVY *= 0.9;
+      structureAV *= 0.88;
+      structureAngle *= 0.92;
       return;
     }
     const flying = !!level().fly;
@@ -1638,9 +1693,40 @@
       structureDVY *= 0.91;
       structureDVY = Math.max(-5.2, Math.min(5.2, structureDVY));
       structureDY += structureDVY * dt * 60;
+
+      // Axis tilt: turn away from threat; spring to 0 when safe
+      const step = dt * 60;
+      if (threat > 0.05) {
+        // Ball on left → lean right (positive angle = top leans right in screen space)
+        const away = Math.sign(cx - predX) || (desired >= 0 ? 1 : -1);
+        structureAV += away * (0.012 + threat * 0.02) * step;
+      } else {
+        structureAV += -structureAngle * 0.08 * step;
+      }
+      structureAV *= 0.88;
+      const maxAV = 0.045;
+      if (structureAV > maxAV) structureAV = maxAV;
+      if (structureAV < -maxAV) structureAV = -maxAV;
+      structureAngle += structureAV * step;
+      // Soft clamp toward ±0.35; hard restoring beyond ±0.55
+      const soft = 0.35;
+      const hard = 0.55;
+      if (structureAngle > soft) structureAV -= (structureAngle - soft) * 0.06 * step;
+      if (structureAngle < -soft) structureAV -= (structureAngle + soft) * 0.06 * step;
+      if (structureAngle > hard) {
+        structureAV -= (structureAngle - hard) * 0.18 * step;
+        structureAngle = hard + (structureAngle - hard) * 0.85;
+      } else if (structureAngle < -hard) {
+        structureAV -= (structureAngle + hard) * 0.18 * step;
+        structureAngle = -hard + (structureAngle + hard) * 0.85;
+      }
+      if (structureAngle > soft * 1.15) structureAngle += (soft - structureAngle) * 0.08 * step;
+      if (structureAngle < -soft * 1.15) structureAngle += (-soft - structureAngle) * 0.08 * step;
     } else {
       structureDVY *= 0.85;
       structureDY *= 0.9;
+      structureAV *= 0.8;
+      structureAngle *= 0.9;
     }
 
     // Límites: que no se salga de pantalla
@@ -2238,7 +2324,16 @@
     drawGround();
     if (!level().fly) drawMechShadow();
     if (brickLayer) {
-      if (structureDX || structureDY) {
+      const flying = !!level().fly;
+      if (flying && (structureDX || structureDY || structureAngle)) {
+        const { cx0, cy0, cx, cy } = structureCenters();
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(structureAngle);
+        ctx.translate(-cx0, -cy0);
+        ctx.drawImage(brickLayer, 0, 0, W, H);
+        ctx.restore();
+      } else if (structureDX || structureDY) {
         ctx.save();
         ctx.translate(structureDX, structureDY);
         ctx.drawImage(brickLayer, 0, 0, W, H);
