@@ -125,17 +125,21 @@
 
   function drawBrickToLayer(br) {
     const lctx = brickLayer.getContext('2d');
-    const pad = 0.35;
-    lctx.clearRect(br.x - 0.5, br.y - 0.5, br.w + 1, br.h + 1);
-    // Solo estructura apoyada se dibuja en la capa estática
+    // Limpiar y pintar opaco a tope (sin huecos al fondo)
+    lctx.clearRect(br.x - 0.6, br.y - 0.6, br.w + 1.2, br.h + 1.2);
     if (!br.alive || br.falling || br.settled) return;
     const t = br.hp / br.maxHp;
-    lctx.fillStyle = shade(br.color, 0.52 + 0.48 * t);
-    lctx.fillRect(br.x + pad, br.y + pad, br.w - pad * 2, br.h - pad * 2);
+    // Solape mínimo para que no se filtre el escenario entre ladrillos
+    lctx.fillStyle = shade(br.color, 0.62 + 0.38 * t);
+    lctx.fillRect(br.x - 0.35, br.y - 0.35, br.w + 0.7, br.h + 0.7);
+    // Borde interno opaco para sellar
+    lctx.strokeStyle = shade(br.color, 0.45);
+    lctx.lineWidth = 0.8;
+    lctx.strokeRect(br.x - 0.1, br.y - 0.1, br.w + 0.2, br.h + 0.2);
     if (br.maxHp >= 2) {
-      lctx.strokeStyle = 'rgba(255,196,70,0.35)';
+      lctx.strokeStyle = 'rgba(255,196,70,0.55)';
       lctx.lineWidth = 1;
-      lctx.strokeRect(br.x + 0.8, br.y + 0.8, br.w - 1.6, br.h - 1.6);
+      lctx.strokeRect(br.x + 0.6, br.y + 0.6, br.w - 1.2, br.h - 1.2);
     }
   }
 
@@ -274,8 +278,9 @@
     const availW = W - pad * 2;
     const availH = H - pad * 2 - paddleSpace;
     const fit = Math.min(availW / imgW, availH / imgH);
-    brickPx = Math.max(3.5, cell * fit * 0.96);
     cellScreen = cell * fit;
+    // Cubrir todo el grid sin huecos al fondo
+    brickPx = Math.max(3.5, cellScreen + 0.6);
     originX = (W - imgW * fit) / 2;
     originY = pad + 6;
 
@@ -943,8 +948,8 @@
     for (const br of bricks) {
       if (!br.alive) continue;
       if (!br.falling && !br.settled) continue;
-      ctx.fillStyle = br.settled ? shade(br.color, 0.75) : br.color;
-      ctx.fillRect(br.x, br.y, br.w, br.h);
+      ctx.fillStyle = br.settled ? shade(br.color, 0.85) : br.color;
+      ctx.fillRect(br.x - 0.3, br.y - 0.3, br.w + 0.6, br.h + 0.6);
     }
   }
 
@@ -966,31 +971,44 @@
       return;
     }
     const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
-    const scale = Math.max(W / iw, H / ih) * 1.08;
+    // Más grande; el suelo de la plaza (~78% de la imagen) cae en groundY (pies del mech)
+    const groundFrac = 0.78;
+    const needH = Math.max(H * 1.25, (groundY + H * 0.35) / groundFrac);
+    const scale = Math.max(W / iw, needH / ih) * 1.12;
     const dw = iw * scale, dh = ih * scale;
-    const drift = (Math.sin(bgT * 0.07) * 0.5 + 0.5) * (dw - W) * 0.35
-                + Math.sin(bgT * 0.023) * 8;
-    const dx = -drift - (dw - W) * 0.15;
-    const dy = -(dh - H) * 0.35;
+    // Solo pan horizontal suave; vertical fijo al suelo
+    const drift = Math.sin(bgT * 0.045) * Math.min(28, (dw - W) * 0.08);
+    const dx = -(dw - W) * 0.5 + drift;
+    const dy = groundY - groundFrac * dh;
     ctx.drawImage(bgImg, dx, dy, dw, dh);
+
+    // Capas suaves de “calor” sin mover el suelo
     ctx.save();
-    ctx.globalAlpha = 0.14;
-    const drift2 = (bgT * 6) % Math.max(1, dw);
-    ctx.drawImage(bgImg, dx - drift2 * 0.15, dy - 10, dw, dh);
-    ctx.globalAlpha = 0.08;
-    ctx.drawImage(bgImg, dx + 20 + Math.sin(bgT * 0.05) * 12, dy + 6, dw, dh);
+    ctx.globalAlpha = 0.10;
+    ctx.drawImage(bgImg, dx + Math.sin(bgT * 0.06) * 6, dy - 4, dw, dh);
+    ctx.globalAlpha = 0.06;
+    ctx.drawImage(bgImg, dx - 8, dy + 3, dw, dh);
     ctx.restore();
-    ctx.fillStyle = 'rgba(10, 6, 4, 0.28)';
+
+    // Vineta ligera (no tapa tanto el suelo)
+    const grd = ctx.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, 'rgba(10,6,4,0.22)');
+    grd.addColorStop(0.55, 'rgba(10,6,4,0.10)');
+    grd.addColorStop(0.78, 'rgba(10,6,4,0.05)');
+    grd.addColorStop(1, 'rgba(10,6,4,0.25)');
+    ctx.fillStyle = grd;
     ctx.fillRect(0, 0, W, H);
+
     for (const p of bgDust) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(255, 170, 90, ${p.a})`;
       ctx.fill();
     }
-    const flicker = 0.04 + Math.sin(bgT * 3.1) * 0.02 + Math.sin(bgT * 7.7) * 0.015;
+    const flicker = 0.03 + Math.sin(bgT * 3.1) * 0.015 + Math.sin(bgT * 7.7) * 0.01;
     ctx.fillStyle = `rgba(255, 140, 40, ${flicker})`;
-    ctx.fillRect(0, H * 0.55, W, H * 0.2);
+    // Letreros: un poco arriba del suelo del mech
+    ctx.fillRect(0, Math.max(0, groundY - H * 0.28), W, H * 0.16);
   }
 
   function updateBg(dt) {
