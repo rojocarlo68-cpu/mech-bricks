@@ -755,8 +755,12 @@
     if (won || gameOver || outro === 'done' || l6Transit) return;
     refreshTotalStructureCount();
     if (structureCount > 0) return;
-    // L6: wait for remaining pawn / rook spawns before win / next phase
-    if (level().id === 6 && !l6RookStarted && (l6Wave < 3 || l6PendingSpawn)) return;
+    // L6: wave 1 clear → finishOutro → l6PhaseTransition (camera + waves 2–3).
+    // After wave 2+, wait for remaining pawn spawns before rook phase.
+    // Rook phase: wait until all 3 rooks spawned before true win.
+    if (level().id === 6 && !l6RookStarted) {
+      if (l6Wave > 1 && (l6Wave < 3 || l6PendingSpawn)) return;
+    }
     if (level().id === 6 && l6RookStarted && l6RooksSpawned < 3) return;
     // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria / L6 transit
     if (countFalling() > 0) startSlowMoOutro();
