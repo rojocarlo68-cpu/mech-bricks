@@ -972,7 +972,7 @@
     }
     const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
     // Más grande; el suelo de la plaza (~78% de la imagen) cae en groundY (pies del mech)
-    const groundFrac = 0.78;
+    const groundFrac = 0.86;
     const needH = Math.max(H * 1.25, (groundY + H * 0.35) / groundFrac);
     const scale = Math.max(W / iw, needH / ih) * 1.12;
     const dw = iw * scale, dh = ih * scale;
