@@ -16,7 +16,7 @@
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false, irregularBricks: true },
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
-    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level4.jpg', paddleScale: 0.94, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.85, panels: true },
+    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level4.jpg', paddleScale: 0.94, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.85, irregularBricks: true },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -1235,7 +1235,9 @@
   function hitBrick(br) {
     if (!br.alive || br.falling || br.settled) return;
     bumpCam(0.55);
-    spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, br.hp <= 1 ? 14 : 8);
+    const hx = br.x + br.w / 2, hy = br.y + br.h / 2;
+    spawnDust(hx, hy, br.color, br.hp <= 1 ? 14 : 8);
+    spawnMetalSparks(hx, hy); // chispas metal-metal
     br.hp -= ballDamage();
     score += 1; // $1 por golpe
     if (br.hp <= 0) {
