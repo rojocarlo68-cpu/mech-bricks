@@ -10,8 +10,13 @@
   const livesEl = document.getElementById('lives');
   const resetBtn = document.getElementById('reset');
 
-  const IMG_SRC = 'mech.png';
   const MIN_BRICKS = 7000;
+  const LEVELS = [
+    { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', paddleScale: 1.0 },
+    { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', paddleScale: 0.98 },
+  ];
+  let levelIndex = 0; // 0 = nivel 1
+  function level() { return LEVELS[levelIndex]; }
   const MAX_BRICKS = 12000;
   const START_LIVES = 3;
   const BOMB_EVERY = 4.2;
@@ -96,7 +101,7 @@
         resolve();
       };
       img.onerror = reject;
-      img.src = IMG_SRC;
+      img.src = level().mech;
     });
   }
 
@@ -153,7 +158,7 @@
   }
 
   function updateHud() {
-    countEl.textContent = `${structureCount} ladrillos`;
+    countEl.textContent = `${level().name} · ${structureCount} ladrillos`;
     scoreEl.textContent = `$${score}`;
     renderLives();
   }
@@ -251,12 +256,39 @@
   function finishOutro() {
     if (outro === 'done' || won) return;
     outro = 'done';
-    won = true;
     launched = false;
     bombs = [];
-    hint.classList.add('show');
-    hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Reinicia para otra ronda</span>';
-    updateHud();
+    if (levelIndex < LEVELS.length - 1) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Toca para el siguiente nivel</span>';
+      updateHud();
+      // siguiente nivel al tocar / auto
+      window.__gotoNext = true;
+      setTimeout(() => { if (window.__gotoNext) startNextLevel(); }, 2200);
+    } else {
+      won = true;
+      window.__gotoNext = false;
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Zona despejada!</strong><span>Completaste los niveles · Reinicia</span>';
+      updateHud();
+    }
+  }
+
+  async function startNextLevel() {
+    window.__gotoNext = false;
+    if (levelIndex >= LEVELS.length - 1) return;
+    levelIndex++;
+    loading.classList.remove('hide');
+    loading.textContent = `Cargando ${level().name}…`;
+    hint.classList.remove('show');
+    try {
+      await loadImage();
+      buildLevel();
+      loading.classList.add('hide');
+    } catch (err) {
+      loading.textContent = 'No pude cargar el nivel.';
+      console.error(err);
+    }
   }
 
   function maybeWin() {
@@ -353,7 +385,7 @@
     launched = false;
     updateHud();
 
-    const pw = Math.min(168, W * 0.42);
+    const pw = Math.min(168, W * 0.42) * (level().paddleScale || 1);
     const ph = Math.max(28, pw * (271 / 1030)); // proporción del arte
     paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
     paddleTrail = [];
@@ -1055,6 +1087,7 @@
   function onDown(e) {
     e.preventDefault();
     pointerX = pointerPos(e).x;
+    if (window.__gotoNext) { startNextLevel(); return; }
     if (!launched && !gameOver && !won) launch();
   }
   function onMove(e) {
@@ -1069,6 +1102,14 @@
 
   resetBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    window.__gotoNext = false;
+    if (won && levelIndex >= LEVELS.length - 1) {
+      levelIndex = 0;
+      loading.classList.remove('hide');
+      loading.textContent = 'Cargando Nivel 1…';
+      loadImage().then(() => { buildLevel(); loading.classList.add('hide'); });
+      return;
+    }
     buildLevel();
   });
 
