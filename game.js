@@ -34,7 +34,7 @@
 
   const SHOP = [
     { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 1080 },
-    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · ráfagas + enfriamiento', icon: '🔫', price: 4120 },
+    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · 10s de duración', icon: '🔫', price: 4120 },
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
     { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 1090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
@@ -67,7 +67,7 @@
   let running = false, launched = false, gameOver = false, won = false;
   let ballStallT = 0;
   let ballLastAng = -Math.PI / 2;
-  let score = 26000, lives = START_LIVES, aliveCount = 0; // TEMP test balls
+  let score = 0, lives = START_LIVES, aliveCount = 0;
   let pointerX = null;
   let lastTs = 0;
   let particles = [];
@@ -81,6 +81,8 @@
   let laserFireUntil = 0; // performance.now() deadline
   const LASER_FIRE_S = 1.0;
   const LASER_CD_S = 7.0;
+  const LASER_TOTAL_S = 10.0; // duración total activa
+  let laserExpireAt = 0; // performance.now() deadline
   let laserCdEl = null;
   let laserCdFillEl = null;
   let bombImg = null;
@@ -442,6 +444,7 @@
     laserPhase = null;
     laserPhaseT = 0;
     laserFireUntil = 0;
+    laserExpireAt = 0;
     laserAwaitUnpause = false;
     updateLaserCdUi();
   }
@@ -451,6 +454,8 @@
     laserAwaitUnpause = false;
     laserPhase = 'warmup';
     laserPhaseT = 1.0; // 1s después de quitar pausa
+    // 10s de duración total desde que empieza el calentamiento
+    if (!laserExpireAt) laserExpireAt = performance.now() + LASER_TOTAL_S * 1000;
     updateLaserCdUi();
   }
 
@@ -467,6 +472,7 @@
     laserAwaitUnpause = true;
     laserPhase = null;
     laserPhaseT = 0;
+    laserExpireAt = 0; // se arma en beginLaserWarmup
     // refrescar alto de paleta al cambiar de skin
     if (paddle) {
       const cx = paddle.x + paddle.w / 2;
@@ -4474,7 +4480,7 @@
         stickBallToPaddle();
       }
       hint.classList.add('show');
-      hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>Listos en 1s · ráfaga 1s · CD 7s</span>';
+      hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>10s de duración · ráfaga 1s · CD 7s</span>';
     } else if (id === 'ballskin' || id === 'ballsilbadora') {
       activeBallSkin = id;
       if (ball && baseBallR) ball.r = baseBallR * ballRadiusMult();
@@ -4537,6 +4543,14 @@
     if (!laserCannonsActive || !paddle) return;
     if (gameOver || won) {
       clearLaserCannons();
+      return;
+    }
+    if (laserExpireAt && performance.now() >= laserExpireAt) {
+      clearLaserCannons();
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>🔫 Láser agotado</strong><span>Duración de 10s terminada</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => { if (!gameOver) hint.classList.remove('show'); }, 1800);
       return;
     }
     if (laserAwaitUnpause || !laserPhase) {
