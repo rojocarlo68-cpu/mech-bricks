@@ -14,7 +14,7 @@
   const LEVELS = [
     { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', bg: 'bg.jpg', paddleScale: 1.0, groundFrac: 0.93, dodge: false },
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false },
-    { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true },
+    { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -386,12 +386,15 @@
     const paddleSpace = 92;
     const availW = W - pad * 2;
     const availH = H - pad * 2 - paddleSpace;
-    const fit = Math.min(availW / imgW, availH / imgH);
+    const mechScale = level().mechScale != null ? level().mechScale : 1;
+    const fit = Math.min(availW / imgW, availH / imgH) * mechScale;
     cellScreen = cell * fit;
     // Cubrir todo el grid sin huecos al fondo
     brickPx = Math.max(3.5, cellScreen + 0.6);
     originX = (W - imgW * fit) / 2;
-    originY = pad + 6;
+    // Con mech más chico, bajar un poco para que los pies queden cerca del suelo
+    const unusedH = availH - imgH * fit;
+    originY = pad + 6 + Math.max(0, unusedH * 0.55);
 
     bricks = [];
     grid = new Int32Array(cols * rows);
@@ -1182,6 +1185,34 @@
       }
     }
   }
+  function drawMechShadow() {
+    // Sombra elíptica bajo los pies; se mueve con structureDX (dodge)
+    let minX = Infinity, maxX = -Infinity, n = 0;
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      minX = Math.min(minX, br.baseX != null ? br.baseX : br.x);
+      maxX = Math.max(maxX, (br.baseX != null ? br.baseX : br.x) + br.w);
+      n++;
+    }
+    if (!n) return;
+    const cx = (minX + maxX) / 2 + structureDX;
+    const rw = Math.max(28, (maxX - minX) * 0.42);
+    const rh = Math.max(8, brickPx * 2.2);
+    const sy = groundY + rh * 0.15;
+    ctx.save();
+    ctx.translate(cx, sy);
+    ctx.scale(1, rh / rw);
+    const g = ctx.createRadialGradient(0, 0, rw * 0.15, 0, 0, rw);
+    g.addColorStop(0, 'rgba(0,0,0,0.45)');
+    g.addColorStop(0.55, 'rgba(0,0,0,0.22)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, rw, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function drawLooseBricks() {
     for (const br of bricks) {
       if (!br.alive) continue;
@@ -1284,6 +1315,7 @@
 
     drawBackground();
     drawGround();
+    drawMechShadow();
     if (brickLayer) {
       if (structureDX) {
         ctx.save();
