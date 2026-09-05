@@ -17,7 +17,7 @@
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
     { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
-    { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', paddleScale: 0.9027, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.02, brickDamageMult: 1.2 },
+    { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', waves: 3, paddleScale: 0.9027, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.02, brickDamageMult: 1.2 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -119,6 +119,13 @@
   let structureStartCount = 0;
   let outro = null; // null | 'slowmo' | 'done'
   let outroT = 0;   // tiempo real en cámara lenta
+  // L6 multi-wave / dual mechs
+  let l6Wave = 1;
+  let l6PendingSpawn = null;
+  let l6Transit = false;
+  let l6CamFX = null; // { t, dur, swapped }
+  let bgImgB = null;
+  let structures = []; // multi-mech: each is a captured structure snapshot
 
   function size() {
     return {
@@ -489,13 +496,13 @@
       detached++;
     }
 
-    structureCount = 0;
+    let localCount = 0;
     for (let i = 0; i < n; i++) {
       const br = bricks[i];
-      if (br.alive && !br.falling && !br.settled) structureCount++;
+      if (br.alive && !br.falling && !br.settled) localCount++;
     }
-    // Colapso masivo: ≤20% de la estructura inicial → todo cae
-    if (structureCount > 0 && structureStartCount > 0 && structureCount <= structureStartCount * 0.30) {
+    // Colapso masivo: ≤30% de la estructura inicial → todo cae (por estructura)
+    if (localCount > 0 && structureStartCount > 0 && localCount <= structureStartCount * 0.30) {
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
         if (!br.alive || br.falling || br.settled) continue;
@@ -506,7 +513,16 @@
         drawBrickToLayer(br);
         detached++;
       }
+      localCount = 0;
+    }
+    if (structures.length) {
+      for (const S of structures) {
+        if (S.bricks === bricks) S.structureCount = localCount;
+      }
       structureCount = 0;
+      for (const S of structures) structureCount += S.structureCount | 0;
+    } else {
+      structureCount = localCount;
     }
     if (detached > 80) {
       bumpCam(4.2);
@@ -522,13 +538,20 @@
   }
 
   function countFalling() {
+    if (structures.length) {
+      let n = 0;
+      for (const S of structures) {
+        for (const br of S.bricks) if (br.alive && br.falling) n++;
+      }
+      return n;
+    }
     let n = 0;
     for (const br of bricks) if (br.alive && br.falling) n++;
     return n;
   }
 
   function startSlowMoOutro() {
-    if (outro || won || gameOver) return;
+    if (outro || won || gameOver || l6Transit) return;
     outro = 'slowmo';
     outroT = 0;
     bombs = [];
@@ -552,6 +575,107 @@
     hint.innerHTML = '<strong>Cámara lenta</strong><span>El mech se desmorona…</span>';
   }
 
+
+  function captureStructure() {
+    return {
+      bricks, grid, cols, rows, cell, cellScreen, brickPx,
+      originX, originY, fitScale, groundY, brickLayer,
+      structureDX, structureDVX, structureDY, structureDVY,
+      structureAngle, structureAV, jumpPhase, jumpCooldown, jumpTargetDX,
+      structureCount, structureStartCount, minIy, maxIy,
+    };
+  }
+
+  function applyStructure(S) {
+    if (!S) return;
+    bricks = S.bricks;
+    grid = S.grid;
+    cols = S.cols;
+    rows = S.rows;
+    cell = S.cell;
+    cellScreen = S.cellScreen;
+    brickPx = S.brickPx;
+    originX = S.originX;
+    originY = S.originY;
+    fitScale = S.fitScale;
+    groundY = S.groundY;
+    brickLayer = S.brickLayer;
+    structureDX = S.structureDX;
+    structureDVX = S.structureDVX;
+    structureDY = S.structureDY;
+    structureDVY = S.structureDVY;
+    structureAngle = S.structureAngle;
+    structureAV = S.structureAV;
+    jumpPhase = S.jumpPhase;
+    jumpCooldown = S.jumpCooldown;
+    jumpTargetDX = S.jumpTargetDX;
+    structureCount = S.structureCount;
+    structureStartCount = S.structureStartCount;
+    minIy = S.minIy;
+    maxIy = S.maxIy;
+  }
+
+  function writeBackStructure(S) {
+    if (!S) return;
+    S.bricks = bricks;
+    S.grid = grid;
+    S.cols = cols;
+    S.rows = rows;
+    S.cell = cell;
+    S.cellScreen = cellScreen;
+    S.brickPx = brickPx;
+    S.originX = originX;
+    S.originY = originY;
+    S.fitScale = fitScale;
+    S.groundY = groundY;
+    S.brickLayer = brickLayer;
+    S.structureDX = structureDX;
+    S.structureDVX = structureDVX;
+    S.structureDY = structureDY;
+    S.structureDVY = structureDVY;
+    S.structureAngle = structureAngle;
+    S.structureAV = structureAV;
+    S.jumpPhase = jumpPhase;
+    S.jumpCooldown = jumpCooldown;
+    S.jumpTargetDX = jumpTargetDX;
+    // structureCount / structureStartCount: only recomputeSupport / spawn may set per-S
+    S.minIy = minIy;
+    S.maxIy = maxIy;
+  }
+
+  function refreshTotalStructureCount() {
+    if (!structures.length) return structureCount;
+    let total = 0;
+    for (const S of structures) total += S.structureCount | 0;
+    structureCount = total;
+    return total;
+  }
+
+  function eachStructure(fn) {
+    if (!structures.length) {
+      fn(null, -1);
+      return;
+    }
+    for (let i = 0; i < structures.length; i++) {
+      applyStructure(structures[i]);
+      fn(structures[i], i);
+      writeBackStructure(structures[i]);
+    }
+    refreshTotalStructureCount();
+    applyStructure(structures[0]);
+    // Keep HUD total (applyStructure would load S0's per-count only)
+    refreshTotalStructureCount();
+  }
+
+  function loadBgSrc(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
   function syncLevelUrl() {
     try {
       const u = new URL(location.href);
@@ -562,6 +686,14 @@
 
   function finishOutro() {
     if (outro === 'done' || won) return;
+    // L6 wave 1 clear → camera turn + more mechs (not next level)
+    if (level().id === 6 && l6Wave === 1) {
+      outro = null;
+      outroT = 0;
+      window.__outroDust = false;
+      l6PhaseTransition();
+      return;
+    }
     outro = 'done';
     launched = false;
     bombs = [];
@@ -601,12 +733,221 @@
   }
 
   function maybeWin() {
-    if (won || gameOver || outro === 'done') return;
+    if (won || gameOver || outro === 'done' || l6Transit) return;
+    refreshTotalStructureCount();
     if (structureCount > 0) return;
-    // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria
+    // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria / L6 transit
     if (countFalling() > 0) startSlowMoOutro();
     else finishOutro();
   }
+
+  function clearL6Timers() {
+    if (l6PendingSpawn) {
+      clearTimeout(l6PendingSpawn);
+      l6PendingSpawn = null;
+    }
+  }
+
+  function fillBricksFromImage(fit, ox, oy) {
+    const localBricks = [];
+    let localGrid;
+    let localCols, localRows, localCell, localCellScreen, localBrickPx;
+    let localMinIy, localMaxIy, localGroundY = 0;
+
+    // Use globals temporarily for avgCell / mergeIrregularBricks helpers
+    originX = ox;
+    originY = oy;
+    fitScale = fit;
+
+    localCell = pickCell();
+    localCols = Math.ceil(imgW / localCell);
+    localRows = Math.ceil(imgH / localCell);
+    localCellScreen = localCell * fit;
+    localBrickPx = Math.max(3.5, localCellScreen + (level().fly ? 1.35 : 1.0));
+    localGrid = new Int32Array(localCols * localRows);
+    localGrid.fill(-1);
+    localMinIy = localRows;
+    localMaxIy = 0;
+
+    cell = localCell;
+    cols = localCols;
+    rows = localRows;
+    cellScreen = localCellScreen;
+    brickPx = localBrickPx;
+    grid = localGrid;
+    bricks = localBricks;
+    minIy = localMinIy;
+    maxIy = localMaxIy;
+    groundY = 0;
+
+    for (let iy = 0; iy < rows; iy++) {
+      for (let ix = 0; ix < cols; ix++) {
+        if (bricks.length >= MAX_BRICKS) break;
+        const c = avgCell(ix, iy, cell);
+        if (!c) continue;
+        minIy = Math.min(minIy, iy);
+        maxIy = Math.max(maxIy, iy);
+        const maxHp = 1;
+        const bx = originX + ix * cellScreen;
+        const by = originY + iy * cellScreen;
+        const br = {
+          ix, iy,
+          baseX: bx,
+          baseY: by,
+          x: bx,
+          y: by,
+          w: brickPx,
+          h: brickPx,
+          color: `rgb(${c.r},${c.g},${c.b})`,
+          hp: maxHp,
+          maxHp,
+          alive: true,
+          falling: false,
+          settled: false,
+          vx: 0,
+          vy: 0,
+        };
+        groundY = Math.max(groundY, br.y + br.h);
+        grid[iy * cols + ix] = bricks.length;
+        bricks.push(br);
+      }
+    }
+    groundY += 0.5;
+    if (level().irregularBricks) mergeIrregularBricks();
+
+    brickLayer = document.createElement('canvas');
+    brickLayer.width = Math.floor(W * dpr);
+    brickLayer.height = Math.floor(H * dpr);
+    const lctx = brickLayer.getContext('2d');
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lctx.clearRect(0, 0, W, H);
+    for (const br of bricks) drawBrickToLayer(br);
+
+    structureCount = bricks.length;
+    structureStartCount = structureCount;
+    structureDX = 0;
+    structureDVX = 0;
+    structureDY = 0;
+    structureDVY = 0;
+    structureAngle = 0;
+    structureAV = 0;
+    jumpPhase = 'ground';
+    jumpCooldown = 0.4;
+    jumpTargetDX = 0;
+  }
+
+  function buildStructureInstance(opts) {
+    opts = opts || {};
+    const pad = 12;
+    const paddleSpace = 92;
+    const availW = W - pad * 2;
+    const availH = H - pad * 2 - paddleSpace;
+    const mechScale = level().mechScale != null ? level().mechScale : 1;
+    const fit = Math.min(availW / imgW, availH / imgH) * mechScale;
+    const ox = (W - imgW * fit) / 2;
+    const unusedH = availH - imgH * fit;
+    const yBias = level().fly ? 0.28 : 0.55;
+    const oy = pad + 6 + Math.max(0, unusedH * yBias);
+
+    fillBricksFromImage(fit, ox, oy);
+
+    const mechW = imgW * fitScale;
+    const side = opts.side || 'right';
+    if (side === 'left') {
+      structureDX = -originX - mechW - 40;
+    } else {
+      structureDX = (W + 40) - originX;
+    }
+    jumpTargetDX = 0;
+    structureDVX = (jumpTargetDX - structureDX) / 28;
+    structureDVX = Math.max(-5.5, Math.min(5.5, structureDVX));
+    jumpPhase = 'up';
+    structureDVY = -Math.sqrt(Math.max(8, 2 * G * 36));
+    jumpCooldown = 0.35;
+    applyStructureOffset();
+
+    const S = captureStructure();
+    return S;
+  }
+
+  async function l6PhaseTransition() {
+    if (l6Transit) return;
+    l6Transit = true;
+    clearL6Timers();
+    bombs = [];
+    playerBomb = null;
+    if (ball) { ball.vx = 0; ball.vy = 0; }
+    launched = false;
+    outro = null;
+    bumpCam(6);
+    l6CamFX = { t: 0, dur: 0.9, swapped: false };
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¿Qué…?</strong><span>La cámara gira…</span>';
+    try {
+      if (!bgImgB && level().bgB) bgImgB = await loadBgSrc(level().bgB);
+    } catch (e) {
+      console.warn('bg-level6b', e);
+    }
+  }
+
+  function updateL6Transit(dt) {
+    if (!l6Transit || !l6CamFX) return;
+    l6CamFX.t += dt;
+    const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
+    if (u >= 0.42 && !l6CamFX.swapped) {
+      l6CamFX.swapped = true;
+      if (bgImgB) bgImg = bgImgB;
+      if (level().bgB) level().bg = level().bgB;
+    }
+    if (u < 1) return;
+
+    l6Transit = false;
+    l6CamFX = null;
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Oh no! ¡Hay otro!</strong><span>¡Destrúyelos a todos!</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (launched && !gameOver && !paused && !l6Transit) hint.classList.remove('show');
+    }, 2200);
+
+    spawnL6Wave(2);
+    // ball back on paddle — player launches
+    if (ball && paddle) {
+      stickBallToPaddle();
+      launched = false;
+    }
+    clearL6Timers();
+    l6PendingSpawn = setTimeout(() => {
+      l6PendingSpawn = null;
+      if (level().id !== 6 || won || gameOver) return;
+      spawnL6Wave(3);
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Y otro más!</strong><span>Dos mechs a la vez</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => {
+        if (launched && !gameOver && !paused) hint.classList.remove('show');
+      }, 1800);
+    }, 3000);
+  }
+
+  function spawnL6Wave(wave) {
+    const side = wave === 2 ? (Math.random() < 0.5 ? 'left' : 'right') : (structures[0] && structures[0].structureDX > 0 ? 'left' : 'right');
+    const S = buildStructureInstance({ side });
+    if (wave === 2) {
+      structures = [S];
+      applyStructure(S);
+    } else {
+      structures.push(S);
+      applyStructure(structures[0]);
+    }
+    l6Wave = Math.max(l6Wave, wave);
+    refreshTotalStructureCount();
+    aliveCount = 0;
+    for (const st of structures) aliveCount += st.bricks.length;
+    updateHud();
+    bumpCam(3.5);
+  }
+
 
   function mergeIrregularBricks() {
     // Fusiona ~18% de semillas en ladrillos 2x2 / 2x1 / 1x2 / 3x2 (AABB opacos)
@@ -950,6 +1291,13 @@
 
   function buildLevel() {
     resizeCanvas();
+    clearL6Timers();
+    l6Wave = 1;
+    l6Transit = false;
+    l6CamFX = null;
+    structures = [];
+    // Reset L6 primary bg if we swapped to ruined corridor
+    if (LEVELS[5] && LEVELS[5].bgB) LEVELS[5].bg = 'bg-level6.jpg';
 
     const pad = 12;
     const paddleSpace = 92;
@@ -1293,13 +1641,7 @@
     ball.speed = boost;
   }
 
-  function explodeAt(x, y, radius, ptsPerBrick) {
-    bumpCam(radius && radius > EXPLODE_R ? 7.2 : 5.5);
-    const R = radius != null ? radius : EXPLODE_R;
-    const pts = ptsPerBrick != null ? ptsPerBrick : 1;
-    const r2 = R * R;
-    spawnDust(x, y, 'rgb(255,120,40)', radius && radius > EXPLODE_R ? 56 : 40);
-    spawnDust(x, y, 'rgb(80,80,80)', radius && radius > EXPLODE_R ? 36 : 24);
+  function explodeAtOnCurrent(x, y, R, pts, r2) {
     const hitList = [];
     for (const br of bricks) {
       if (!br.alive || br.settled) continue;
@@ -1308,7 +1650,6 @@
       const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
       if (d2 <= r2) hitList.push(br);
     }
-    // Destruir y luego un solo recompute
     for (const br of hitList) {
       spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, 5);
       const wasStructure = !br.falling;
@@ -1322,16 +1663,38 @@
       score += pts;
       drawBrickToLayer(br);
     }
-    recomputeSupport();
+    if (hitList.length) recomputeSupport();
+    return hitList.length;
+  }
+
+  function explodeAt(x, y, radius, ptsPerBrick) {
+    bumpCam(radius && radius > EXPLODE_R ? 7.2 : 5.5);
+    const R = radius != null ? radius : EXPLODE_R;
+    const pts = ptsPerBrick != null ? ptsPerBrick : 1;
+    const r2 = R * R;
+    spawnDust(x, y, 'rgb(255,120,40)', radius && radius > EXPLODE_R ? 56 : 40);
+    spawnDust(x, y, 'rgb(80,80,80)', radius && radius > EXPLODE_R ? 36 : 24);
+    if (structures.length) {
+      eachStructure(() => explodeAtOnCurrent(x, y, R, pts, r2));
+      refreshTotalStructureCount();
+      updateHud();
+      maybeWin();
+      return;
+    }
+    explodeAtOnCurrent(x, y, R, pts, r2);
   }
 
   function spawnBomb() {
-    if (gameOver || won || !launched) return;
+    if (gameOver || won || !launched || l6Transit) return;
     const candidates = [];
-    for (const br of bricks) {
-      if (!br.alive || br.falling || br.settled) continue;
-      candidates.push(br);
-    }
+    const gather = () => {
+      for (const br of bricks) {
+        if (!br.alive || br.falling || br.settled) continue;
+        candidates.push(br);
+      }
+    };
+    if (structures.length) eachStructure(gather);
+    else gather();
     if (!candidates.length) return;
     candidates.sort((a, b) => a.x - b.x);
     const pickPool = candidates.slice(0, Math.max(8, (candidates.length * 0.35) | 0));
@@ -1364,7 +1727,7 @@
     return { bounceX: false, bounceY: true };
   }
 
-  function collideBricksWithBall() {
+  function collideBricksWithBallOnCurrent() {
     let hit = null;
     let bounceX = false;
     let bounceY = false;
@@ -1415,12 +1778,25 @@
       }
     }
 
-    if (!hit) return;
+    if (!hit) return false;
     if (bounceX) ball.vx *= -1;
     if (bounceY) ball.vy *= -1;
     ball.x += Math.sign(ball.vx || 1) * 0.6;
     ball.y += Math.sign(ball.vy || 1) * 0.6;
     hitBrick(hit);
+    return true;
+  }
+
+  function collideBricksWithBall() {
+    if (!structures.length) {
+      collideBricksWithBallOnCurrent();
+      return;
+    }
+    let struck = false;
+    eachStructure(() => {
+      if (struck) return;
+      if (collideBricksWithBallOnCurrent()) struck = true;
+    });
   }
 
   function updateBombs(dt) {
@@ -1453,18 +1829,15 @@
       }
 
       if (b.reflected) {
-        let struck = false;
-        if (level().panels) {
-          for (let i = 0; i < bricks.length && !struck; i++) {
-            const br = bricks[i];
-            if (!br.alive || br.falling || br.settled) continue;
-            if (collideCircleAABB(b.x, b.y, b.r, br)) {
-              explodeAt(b.x, b.y);
-              b.alive = false;
-              struck = true;
+        const tryHit = () => {
+          if (level().panels) {
+            for (let i = 0; i < bricks.length; i++) {
+              const br = bricks[i];
+              if (!br.alive || br.falling || br.settled) continue;
+              if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
             }
+            return false;
           }
-        } else {
           let ox, oy, lx, ly;
           if (level().fly) {
             const g = ballToStructureGrid(b.x, b.y);
@@ -1478,7 +1851,7 @@
           const iy0 = Math.floor((ly - b.r - oy) / cellScreen) - 1;
           const ix1 = Math.floor((lx + b.r - ox) / cellScreen) + 1;
           const iy1 = Math.floor((ly + b.r - oy) / cellScreen) + 1;
-          for (let iy = iy0; iy <= iy1 && !struck; iy++) {
+          for (let iy = iy0; iy <= iy1; iy++) {
             if (iy < 0 || iy >= rows) continue;
             for (let ix = ix0; ix <= ix1; ix++) {
               if (ix < 0 || ix >= cols) continue;
@@ -1486,14 +1859,23 @@
               if (id < 0) continue;
               const br = bricks[id];
               if (!br.alive || br.falling || br.settled) continue;
-              if (collideCircleAABB(b.x, b.y, b.r, br)) {
-                explodeAt(b.x, b.y);
-                b.alive = false;
-                struck = true;
-                break;
-              }
+              if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
             }
           }
+          return false;
+        };
+        let struck = false;
+        if (structures.length) {
+          eachStructure(() => {
+            if (struck) return;
+            if (tryHit()) struck = true;
+          });
+        } else {
+          struck = tryHit();
+        }
+        if (struck) {
+          explodeAt(b.x, b.y);
+          b.alive = false;
         }
       }
 
@@ -1506,7 +1888,7 @@
     }
   }
 
-  function updateFalling(dt) {
+  function updateFallingOnCurrent(dt) {
     const step = dt * 60;
     let landed = 0;
     let landX = 0;
@@ -1576,6 +1958,10 @@
     }
   }
 
+  function updateFalling(dt) {
+    if (structures.length) eachStructure(() => updateFallingOnCurrent(dt));
+    else updateFallingOnCurrent(dt);
+  }
 
   function structureCenters() {
     const cx0 = originX + (imgW * fitScale) / 2;
@@ -1624,9 +2010,8 @@
     const step = dt * 60;
     jumpCooldown = Math.max(0, jumpCooldown - dt);
 
-    // Soft settle / idle when not in play
-    if (!launched || gameOver || won || outro) {
-      structureDVX *= 0.9;
+    // Soft settle / idle when not in play (still hop-in from off-screen for L6 waves)
+    if (!launched || gameOver || won || outro || l6Transit) {
       structureAV *= 0.8;
       structureAngle *= 0.9;
       if (structureDY < -0.01 || jumpPhase !== 'ground') {
@@ -1636,12 +2021,20 @@
         if (structureDY >= 0) {
           structureDY = 0;
           structureDVY = 0;
-          structureDVX *= 0.35;
+          structureDVX *= 0.45;
           jumpPhase = 'ground';
         }
       } else {
         structureDY = 0;
         structureDVY *= 0.85;
+        // Walk/hop toward center if spawned off-screen
+        if (Math.abs(structureDX) > 14) {
+          structureDVX += (0 - structureDX) * 0.035 * step;
+          structureDVX *= 0.94;
+          structureDX += structureDVX * step;
+        } else {
+          structureDVX *= 0.88;
+        }
       }
       // keep on screen
       const left0 = originX + structureDX;
@@ -1757,7 +2150,8 @@
 
   function updateDodgeAI(dt) {
     if (level().jump) {
-      updateJumpAI(dt);
+      if (structures.length) eachStructure(() => updateJumpAI(dt));
+      else updateJumpAI(dt);
       return;
     }
     const canMove = level().dodge || level().fly;
@@ -1909,6 +2303,22 @@
     if (!running) return;
     if (paused) {
       updateBg(dt * 0.3);
+      return;
+    }
+    if (l6Transit) {
+      updateBg(dt);
+      updateL6Transit(dt);
+      // debris / particles keep simmering during whip-pan
+      updateFalling(dt * 0.45);
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= dt;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        p.x += p.vx * dt * 60;
+        p.y += p.vy * dt * 60;
+        p.vy += (p.metal ? 0.04 : 0.12) * dt * 60;
+        p.vx *= p.metal ? 0.96 : 0.98;
+      }
       return;
     }
     // paleta grande temporal
@@ -2224,6 +2634,51 @@
     btn.setAttribute('aria-hidden', on ? 'false' : 'true');
   }
 
+  function playerBombHitsStructureBrick(b) {
+    const tryHit = () => {
+      if (level().panels) {
+        for (let i = 0; i < bricks.length; i++) {
+          const br = bricks[i];
+          if (!br.alive || br.falling || br.settled) continue;
+          if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
+        }
+        return false;
+      }
+      let ox, oy, lx, ly;
+      if (level().fly) {
+        const g = ballToStructureGrid(b.x, b.y);
+        ox = g.ox; oy = g.oy; lx = g.x; ly = g.y;
+      } else {
+        ox = originX + structureDX;
+        oy = originY + structureDY;
+        lx = b.x; ly = b.y;
+      }
+      const ix0 = Math.floor((lx - b.r - ox) / cellScreen) - 1;
+      const iy0 = Math.floor((ly - b.r - oy) / cellScreen) - 1;
+      const ix1 = Math.floor((lx + b.r - ox) / cellScreen) + 1;
+      const iy1 = Math.floor((ly + b.r - oy) / cellScreen) + 1;
+      for (let iy = iy0; iy <= iy1; iy++) {
+        if (iy < 0 || iy >= rows) continue;
+        for (let ix = ix0; ix <= ix1; ix++) {
+          if (ix < 0 || ix >= cols) continue;
+          const id = grid[iy * cols + ix];
+          if (id < 0) continue;
+          const br = bricks[id];
+          if (!br.alive || br.falling || br.settled) continue;
+          if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
+        }
+      }
+      return false;
+    };
+    if (!structures.length) return tryHit();
+    let hit = false;
+    eachStructure(() => {
+      if (hit) return;
+      if (tryHit()) hit = true;
+    });
+    return hit;
+  }
+
   function updatePlayerBomb(dt) {
     if (!playerBomb || !playerBomb.alive) return;
     playerBomb.t += dt;
@@ -2256,16 +2711,22 @@
       spawnMetalSparks(b.x, paddle.y);
     }
 
+    // Detonate on first alive structure brick hit (no fuse timer)
+    if (playerBombHitsStructureBrick(b)) {
+      b.phase = 'armed';
+      explodeAt(b.x, b.y, EXPLODE_R * 1.55, 1);
+      b.alive = false;
+      playerBomb = null;
+      return;
+    }
+
+    // Visual fuse only (never auto-detonates on timer)
     if (playerBomb.phase === 'fuse' && playerBomb.t >= 3) {
       playerBomb.phase = 'armed';
       playerBomb.t = 0;
       bumpCam(1.2);
-    } else if (playerBomb.phase === 'armed' && playerBomb.t >= 2) {
-      explodeAt(playerBomb.x, playerBomb.y, EXPLODE_R * 1.55, 1);
-      playerBomb.alive = false;
-      playerBomb = null;
-      return;
     }
+    // Leave screen → despawn without life penalty
     if (playerBomb && playerBomb.y - playerBomb.r > H + 40) {
       playerBomb.alive = false;
       playerBomb = null;
@@ -2422,6 +2883,17 @@
     // Un pelín más arriba para que los pies “pisen” el pavimento
     const dy = groundY - groundFrac * dh + brickPx * 0.5;
     ctx.drawImage(bgImg, dx, dy, dw, dh);
+    // L6 transit: crossfade ruined corridor
+    if (l6CamFX && bgImgB && !l6CamFX.swapped) {
+      const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
+      const fade = Math.max(0, (u - 0.25) / 0.35);
+      if (fade > 0) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, fade);
+        ctx.drawImage(bgImgB, dx, dy, dw, dh);
+        ctx.restore();
+      }
+    }
 
     // Capas suaves de “calor” sin mover el suelo
     ctx.save();
@@ -2467,6 +2939,27 @@
     camShake = Math.min(18, camShake + amount * 1.3);
   }
 
+  function drawStructureLayer() {
+    if (!brickLayer) return;
+    const flying = !!level().fly;
+    if (flying && (structureDX || structureDY || structureAngle)) {
+      const { cx0, cy0, cx, cy } = structureCenters();
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(structureAngle);
+      ctx.translate(-cx0, -cy0);
+      ctx.drawImage(brickLayer, 0, 0, W, H);
+      ctx.restore();
+    } else if (structureDX || structureDY) {
+      ctx.save();
+      ctx.translate(structureDX, structureDY);
+      ctx.drawImage(brickLayer, 0, 0, W, H);
+      ctx.restore();
+    } else {
+      ctx.drawImage(brickLayer, 0, 0, W, H);
+    }
+  }
+
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
@@ -2475,9 +2968,19 @@
     const rest = paused ? 0.2 : 0.72; // +30% inquietud base
     const amp = rest + camShake;
     const t = performance.now() * 0.001;
-    const ox = Math.sin(t * 17.3) * amp * 0.35 + Math.sin(t * 41.1) * amp * 0.18;
-    const oy = Math.cos(t * 19.7) * amp * 0.28 + Math.sin(t * 33.5) * amp * 0.16;
-    const rot = (Math.sin(t * 13.1) * amp) * 0.00055;
+    let ox = Math.sin(t * 17.3) * amp * 0.35 + Math.sin(t * 41.1) * amp * 0.18;
+    let oy = Math.cos(t * 19.7) * amp * 0.28 + Math.sin(t * 33.5) * amp * 0.16;
+    let rot = (Math.sin(t * 13.1) * amp) * 0.00055;
+
+    // L6 phone-camera whip pan
+    if (l6CamFX) {
+      const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
+      const swing = Math.sin(u * Math.PI) * (26 * Math.PI / 180);
+      const slide = Math.sin(u * Math.PI) * (u < 0.5 ? 90 : -70);
+      ox += slide;
+      oy += Math.sin(u * Math.PI * 2) * 28;
+      rot += swing * (u < 0.55 ? 1 : -0.55);
+    }
 
     ctx.save();
     ctx.translate(W / 2 + ox, H / 2 + oy);
@@ -2486,33 +2989,30 @@
 
     drawBackground();
     drawGround();
-    if (!level().fly) drawMechShadow();
-    if (brickLayer) {
-      const flying = !!level().fly;
-      if (flying && (structureDX || structureDY || structureAngle)) {
-        const { cx0, cy0, cx, cy } = structureCenters();
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(structureAngle);
-        ctx.translate(-cx0, -cy0);
-        ctx.drawImage(brickLayer, 0, 0, W, H);
-        ctx.restore();
-      } else if (structureDX || structureDY) {
-        ctx.save();
-        ctx.translate(structureDX, structureDY);
-        ctx.drawImage(brickLayer, 0, 0, W, H);
-        ctx.restore();
-      } else {
-        ctx.drawImage(brickLayer, 0, 0, W, H);
-      }
+    if (!level().fly) {
+      if (structures.length) eachStructure(() => drawMechShadow());
+      else drawMechShadow();
     }
-    drawLooseBricks();
+    if (structures.length) eachStructure(() => drawStructureLayer());
+    else drawStructureLayer();
+    if (structures.length) eachStructure(() => drawLooseBricks());
+    else drawLooseBricks();
     drawParticles();
     drawBombs();
     drawLaserBeams();
     drawPaddle();
     drawBallAirTrail();
     drawBall();
+
+    // Motion-blur / flash feel during whip
+    if (l6CamFX) {
+      const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
+      const flash = Math.sin(u * Math.PI);
+      ctx.fillStyle = `rgba(20,8,0,${0.18 * flash})`;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = `rgba(255,160,60,${0.08 * flash})`;
+      ctx.fillRect(0, 0, W, H);
+    }
     ctx.restore();
   }
 
@@ -2539,7 +3039,7 @@
     if (paused) return;
     pointerX = pointerPos(e).x;
     if (window.__gotoNext) { startNextLevel(); return; }
-    if (!launched && !gameOver && !won) launch();
+    if (!launched && !gameOver && !won && !l6Transit) launch();
   }
   function onMove(e) {
     e.preventDefault();
@@ -2575,7 +3075,15 @@
   function loadBg() {
     return new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => { bgImg = img; resolve(); };
+      img.onload = () => {
+        bgImg = img;
+        if (level().bgB) {
+          loadBgSrc(level().bgB).then((b) => { bgImgB = b; resolve(); }).catch(() => resolve());
+        } else {
+          bgImgB = null;
+          resolve();
+        }
+      };
       img.onerror = reject;
       img.src = level().bg || 'bg.jpg';
     });
@@ -2641,7 +3149,7 @@
   }
 
   function openPause() {
-    if (gameOver || outro === 'slowmo') return;
+    if (gameOver || outro === 'slowmo' || l6Transit) return;
     paused = true;
     setOverlay(pauseOverlay, true);
     setOverlay(shopOverlay, false);
@@ -2789,14 +3297,13 @@
     setTimeout(() => { if (!paused) hint.classList.remove('show'); }, 1200);
   }
 
-  function burnLaserColumn(x) {
+  function burnLaserColumnOnCurrent(x) {
     const half = Math.max(brickPx * 1.0, 8);
     if (level().panels) {
       for (let i = 0; i < bricks.length; i++) {
         const br = bricks[i];
         if (!br.alive || br.falling || br.settled) continue;
         if (br.y + br.h < 0 || br.y >= paddle.y) continue;
-        // column intersects AABB
         if (br.x > x + half || br.x + br.w < x - half) continue;
         const cx = br.x + br.w / 2;
         spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
@@ -2820,6 +3327,11 @@
         destroyBrick(br, 1);
       }
     }
+  }
+
+  function burnLaserColumn(x) {
+    if (structures.length) eachStructure(() => burnLaserColumnOnCurrent(x));
+    else burnLaserColumnOnCurrent(x);
   }
 
   function updateLaserCannons(dt) {
@@ -2929,7 +3441,7 @@
     btnBomb.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      if (!playerBombArmed || playerBomb || !ball || gameOver || won || outro) return;
+      if (!playerBombArmed || playerBomb || !ball || gameOver || won || outro || l6Transit) return;
       if (!launched) return;
       const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
       const ang = Math.atan2(ball.vy, ball.vx);
@@ -2947,7 +3459,7 @@
       playerBombArmed = false;
       setBombButton(false);
       hint.classList.add('show');
-      hint.innerHTML = '<strong>💣 Bomba en camino</strong><span>Espoleta 3s · armada 2s</span>';
+      hint.innerHTML = '<strong>💣 Bomba en camino</strong><span>Explota al tocar un ladrillo</span>';
       setTimeout(() => { if (!paused && launched) hint.classList.remove('show'); }, 1400);
     });
   }
