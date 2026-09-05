@@ -200,10 +200,13 @@
     // La capa estática usa coords base (sin dodge)
     const lx = br.baseX != null ? br.baseX : br.x;
     const ly = br.baseY != null ? br.baseY : br.y;
-    lctx.clearRect(lx - 1.2, ly - 1.2, br.w + 2.4, br.h + 2.4);
-    if (!br.alive || br.falling || br.settled) return;
+    // Solo limpiar al quitar el ladrillo. Si clear+fill en cada uno,
+    // el clear borra el solape de los vecinos → se ve el fondo ("transparente").
+    if (!br.alive || br.falling || br.settled) {
+      lctx.clearRect(lx - 0.5, ly - 0.5, br.w + 1.0, br.h + 1.0);
+      return;
+    }
     const t = br.hp / br.maxHp;
-    // fully opaque rgb() — never rgba with alpha < 1
     lctx.fillStyle = shade(br.color, 0.62 + 0.38 * t);
     if (br.panel && br.poly && br.poly.length >= 3) {
       lctx.beginPath();
@@ -211,15 +214,16 @@
       for (let i = 1; i < br.poly.length; i++) lctx.lineTo(br.poly[i].x, br.poly[i].y);
       lctx.closePath();
       lctx.fill();
-      lctx.strokeStyle = shade(br.color, 0.42);
+      lctx.strokeStyle = shade(br.color, 0.35);
       lctx.lineWidth = 1.1;
       lctx.stroke();
       return;
     }
-    lctx.fillRect(lx - 0.35, ly - 0.35, br.w + 0.7, br.h + 0.7);
-    lctx.strokeStyle = shade(br.color, 0.45);
-    lctx.lineWidth = 0.8;
-    lctx.strokeRect(lx - 0.1, ly - 0.1, br.w + 0.2, br.h + 0.2);
+    // Solape fuerte + fill opaco
+    lctx.fillRect(lx - 0.55, ly - 0.55, br.w + 1.1, br.h + 1.1);
+    lctx.strokeStyle = shade(br.color, 0.4);
+    lctx.lineWidth = 0.9;
+    lctx.strokeRect(lx - 0.15, ly - 0.15, br.w + 0.3, br.h + 0.3);
     if (br.maxHp >= 2) {
       lctx.strokeStyle = 'rgba(255,196,70,0.55)';
       lctx.lineWidth = 1;
@@ -976,7 +980,7 @@
       rows = Math.ceil(imgH / cell);
       cellScreen = cell * fit;
       // Cubrir todo el grid sin huecos al fondo
-      brickPx = Math.max(3.5, cellScreen + (level().fly ? 1.15 : 0.6));
+      brickPx = Math.max(3.5, cellScreen + (level().fly ? 1.35 : 1.0));
       grid = new Int32Array(cols * rows);
       grid.fill(-1);
       minIy = rows;
@@ -2764,7 +2768,7 @@
       if (!launched) return;
       const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
       const ang = Math.atan2(ball.vy, ball.vx);
-      const speed = sp * 0.8; // 20% más lenta que la bola
+      const speed = sp * 0.5; // 50% más lenta que la bola
       playerBomb = {
         x: ball.x,
         y: ball.y,
