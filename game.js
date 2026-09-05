@@ -16,6 +16,7 @@
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false, irregularBricks: true },
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
+    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level4.jpg', paddleScale: 0.94, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.85, panels: true },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -95,7 +96,8 @@
   let ballSkinOn = false;
   let baseBallR = 6;
   let bombTimer = 0;
-  let structureCount = 0; // ladrillos aún en la estructura (no caídos)
+  let structureCount = 0; // ladrillos/paneles aún en la estructura (no caídos)
+  let structureStartCount = 0;
   let outro = null; // null | 'slowmo' | 'done'
   let outroT = 0;   // tiempo real en cámara lenta
 
@@ -183,10 +185,21 @@
     // La capa estática usa coords base (sin dodge)
     const lx = br.baseX != null ? br.baseX : br.x;
     const ly = br.baseY != null ? br.baseY : br.y;
-    lctx.clearRect(lx - 0.6, ly - 0.6, br.w + 1.2, br.h + 1.2);
+    lctx.clearRect(lx - 1.2, ly - 1.2, br.w + 2.4, br.h + 2.4);
     if (!br.alive || br.falling || br.settled) return;
     const t = br.hp / br.maxHp;
     lctx.fillStyle = shade(br.color, 0.62 + 0.38 * t);
+    if (br.panel && br.poly && br.poly.length >= 3) {
+      lctx.beginPath();
+      lctx.moveTo(br.poly[0].x, br.poly[0].y);
+      for (let i = 1; i < br.poly.length; i++) lctx.lineTo(br.poly[i].x, br.poly[i].y);
+      lctx.closePath();
+      lctx.fill();
+      lctx.strokeStyle = shade(br.color, 0.42);
+      lctx.lineWidth = 1.1;
+      lctx.stroke();
+      return;
+    }
     lctx.fillRect(lx - 0.35, ly - 0.35, br.w + 0.7, br.h + 0.7);
     lctx.strokeStyle = shade(br.color, 0.45);
     lctx.lineWidth = 0.8;
@@ -208,8 +221,14 @@
   }
 
   function updateHud() {
-    countEl.textContent = `${level().name} · ${structureCount} ladrillos`;
-    scoreEl.textContent = `$${score}`;
+    const unit = level().panels ? 'paneles' : 'ladrillos';
+    countEl.textContent = `${level().name} · ${structureCount} ${unit}`;
+    const moneyTxt = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
+    scoreEl.textContent = moneyTxt;
+    const shopMoney = document.getElementById('shopMoney');
+    const packMoney = document.getElementById('packMoney');
+    if (shopMoney) shopMoney.textContent = moneyTxt;
+    if (packMoney) packMoney.textContent = moneyTxt;
     renderLives();
   }
 
@@ -309,6 +328,7 @@
   }
 
   function clearBrickGrid(br, id) {
+    if (br.panel || !grid) return;
     for (const c of brickCells(br)) {
       const gi = c.iy * cols + c.ix;
       if (grid[gi] === id) grid[gi] = -1;
@@ -316,6 +336,10 @@
   }
 
   function forEachNeighborBrick(br, fn) {
+    if (br.neighbors && br.neighbors.length) {
+      for (let i = 0; i < br.neighbors.length; i++) fn(br.neighbors[i]);
+      return;
+    }
     const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
     const seen = Object.create(null);
     for (const c of brickCells(br)) {
@@ -439,8 +463,8 @@
       const br = bricks[i];
       if (br.alive && !br.falling && !br.settled) structureCount++;
     }
-    // Migajas: 1–pocos ladrillos “soportados” tras el derrumbe no deben bloquear la victoria
-    if (structureCount > 0 && structureCount <= 15) {
+    // Colapso masivo: ≤20% de la estructura inicial → todo cae
+    if (structureCount > 0 && structureStartCount > 0 && structureCount <= structureStartCount * 0.20) {
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
         if (!br.alive || br.falling || br.settled) continue;
@@ -651,11 +675,250 @@
     groundY += 0.5;
   }
 
+  function convexHull(points) {
+    if (points.length <= 2) return points.slice();
+    const pts = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower = [];
+    for (const p of pts) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    const upper = [];
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    return lower.concat(upper);
+  }
+
+  function buildPanels(fit) {
+    const ds = Math.max(2, Math.floor(Math.min(imgW, imgH) / 180));
+    const gw = Math.ceil(imgW / ds);
+    const gh = Math.ceil(imgH / ds);
+    const opaque = [];
+    const rAcc = new Float64Array(gw * gh);
+    const gAcc = new Float64Array(gw * gh);
+    const bAcc = new Float64Array(gw * gh);
+    const nAcc = new Uint16Array(gw * gh);
+
+    for (let gy = 0; gy < gh; gy++) {
+      for (let gx = 0; gx < gw; gx++) {
+        const x0 = gx * ds, y0 = gy * ds;
+        const x1 = Math.min(imgW, x0 + ds);
+        const y1 = Math.min(imgH, y0 + ds);
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let y = y0; y < y1; y++) {
+          for (let x = x0; x < x1; x++) {
+            const i = (y * imgW + x) * 4;
+            if (imgData[i + 3] < 28) continue;
+            r += imgData[i]; g += imgData[i + 1]; b += imgData[i + 2]; n++;
+          }
+        }
+        if (n < Math.max(2, ds * ds * 0.12)) continue;
+        const gi = gy * gw + gx;
+        rAcc[gi] = r; gAcc[gi] = g; bAcc[gi] = b; nAcc[gi] = n;
+        opaque.push(gi);
+      }
+    }
+    if (!opaque.length) return;
+
+    let minGX = gw, maxGX = 0, minGY = gh, maxGY = 0;
+    for (const gi of opaque) {
+      const gx = gi % gw, gy = (gi / gw) | 0;
+      if (gx < minGX) minGX = gx; if (gx > maxGX) maxGX = gx;
+      if (gy < minGY) minGY = gy; if (gy > maxGY) maxGY = gy;
+    }
+
+    const targetN = Math.max(110, Math.min(160, 150));
+    const spanX = Math.max(1, maxGX - minGX + 1);
+    const spanY = Math.max(1, maxGY - minGY + 1);
+    const gridN = Math.max(1, Math.round(Math.sqrt(targetN * (spanX / spanY))));
+    const gridM = Math.max(1, Math.round(targetN / gridN));
+    const cellW = spanX / gridN;
+    const cellH = spanY / gridM;
+    const seeds = [];
+    const usedSeed = Object.create(null);
+
+    for (let j = 0; j < gridM; j++) {
+      for (let i = 0; i < gridN; i++) {
+        if (seeds.length >= targetN) break;
+        const cx0 = minGX + (i + 0.15 + Math.random() * 0.7) * cellW;
+        const cy0 = minGY + (j + 0.15 + Math.random() * 0.7) * cellH;
+        let best = -1, bestD = Infinity;
+        for (const gi of opaque) {
+          const gx = gi % gw, gy = (gi / gw) | 0;
+          const dx = gx + 0.5 - cx0, dy = gy + 0.5 - cy0;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; best = gi; }
+        }
+        if (best >= 0 && !usedSeed[best]) {
+          usedSeed[best] = 1;
+          seeds.push(best);
+        }
+      }
+    }
+    // Fill up if stratified missed some
+    let guard = 0;
+    while (seeds.length < targetN && seeds.length < opaque.length && guard++ < opaque.length * 4) {
+      const gi = opaque[(Math.random() * opaque.length) | 0];
+      if (usedSeed[gi]) continue;
+      usedSeed[gi] = 1;
+      seeds.push(gi);
+    }
+
+    const owner = new Int32Array(gw * gh);
+    owner.fill(-1);
+    for (const gi of opaque) {
+      const gx = gi % gw, gy = (gi / gw) | 0;
+      let best = 0, bestD = Infinity;
+      for (let s = 0; s < seeds.length; s++) {
+        const sgx = seeds[s] % gw, sgy = (seeds[s] / gw) | 0;
+        const dx = gx - sgx, dy = gy - sgy;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = s; }
+      }
+      owner[gi] = best;
+    }
+
+    const buckets = Array.from({ length: seeds.length }, () => []);
+    for (const gi of opaque) {
+      const s = owner[gi];
+      if (s >= 0) buckets[s].push(gi);
+    }
+
+    const minCells = 18;
+    bricks = [];
+    groundY = 0;
+    minIy = rows;
+    maxIy = 0;
+
+    for (let s = 0; s < buckets.length; s++) {
+      const cells = buckets[s];
+      if (cells.length < minCells) continue;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let r = 0, g = 0, b = 0, n = 0;
+      const boundary = [];
+      for (const gi of cells) {
+        const gx = gi % gw, gy = (gi / gw) | 0;
+        if (gx < minX) minX = gx; if (gx > maxX) maxX = gx;
+        if (gy < minY) minY = gy; if (gy > maxY) maxY = gy;
+        r += rAcc[gi]; g += gAcc[gi]; b += bAcc[gi]; n += nAcc[gi];
+        // boundary sample: edge of region or image
+        let isBound = false;
+        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = gx + dx, ny = gy + dy;
+          if (nx < 0 || ny < 0 || nx >= gw || ny >= gh || owner[ny * gw + nx] !== s) {
+            isBound = true; break;
+          }
+        }
+        if (isBound) {
+          boundary.push({
+            x: (gx + 0.5) * ds,
+            y: (gy + 0.5) * ds,
+          });
+        }
+      }
+      if (n < 1) continue;
+
+      // Thin regions: pad AABB a bit
+      const imgMinX = minX * ds;
+      const imgMinY = minY * ds;
+      const imgMaxX = (maxX + 1) * ds;
+      const imgMaxY = (maxY + 1) * ds;
+      const cx = (imgMinX + imgMaxX) / 2;
+      const cy = (imgMinY + imgMaxY) / 2;
+
+      let hullSrc = boundary;
+      if (hullSrc.length < 3) {
+        hullSrc = [
+          { x: imgMinX, y: imgMinY },
+          { x: imgMaxX, y: imgMinY },
+          { x: imgMaxX, y: imgMaxY },
+          { x: imgMinX, y: imgMaxY },
+        ];
+      } else if (hullSrc.length > 48) {
+        // downsample boundary for hull speed
+        const step = Math.ceil(hullSrc.length / 40);
+        hullSrc = hullSrc.filter((_, i) => i % step === 0);
+      }
+      let hull = convexHull(hullSrc);
+      if (hull.length < 3) {
+        hull = [
+          { x: imgMinX, y: imgMinY },
+          { x: imgMaxX, y: imgMinY },
+          { x: imgMaxX, y: imgMaxY },
+          { x: imgMinX, y: imgMaxY },
+        ];
+      }
+
+      const poly = hull.map((p) => ({
+        x: originX + p.x * fit,
+        y: originY + p.y * fit,
+      }));
+      let bx = Infinity, by = Infinity, bx2 = -Infinity, by2 = -Infinity;
+      for (const p of poly) {
+        if (p.x < bx) bx = p.x; if (p.y < by) by = p.y;
+        if (p.x > bx2) bx2 = p.x; if (p.y > by2) by2 = p.y;
+      }
+      // Ensure AABB covers poly
+      const pad = 0.5;
+      bx -= pad; by -= pad; bx2 += pad; by2 += pad;
+      const bw = Math.max(4, bx2 - bx);
+      const bh = Math.max(4, by2 - by);
+      const ix = ((minX + maxX) / 2) | 0;
+      const iy = ((minY + maxY) / 2) | 0;
+      minIy = Math.min(minIy, iy);
+      maxIy = Math.max(maxIy, iy);
+
+      const br = {
+        ix, iy,
+        baseX: bx,
+        baseY: by,
+        x: bx,
+        y: by,
+        w: bw,
+        h: bh,
+        color: `rgb(${(r / n) | 0},${(g / n) | 0},${(b / n) | 0})`,
+        hp: 1,
+        maxHp: 1,
+        alive: true,
+        falling: false,
+        settled: false,
+        vx: 0,
+        vy: 0,
+        panel: true,
+        poly,
+        neighbors: [],
+        cells: [{ ix, iy }],
+      };
+      groundY = Math.max(groundY, br.y + br.h);
+      bricks.push(br);
+    }
+
+    // Adjacency: AABB touch / near
+    const gap = Math.max(4, cellScreen * 1.25);
+    for (let i = 0; i < bricks.length; i++) {
+      const a = bricks[i];
+      for (let j = i + 1; j < bricks.length; j++) {
+        const b = bricks[j];
+        if (a.baseX - gap > b.baseX + b.w) continue;
+        if (b.baseX - gap > a.baseX + a.w) continue;
+        if (a.baseY - gap > b.baseY + b.h) continue;
+        if (b.baseY - gap > a.baseY + a.h) continue;
+        a.neighbors.push(j);
+        b.neighbors.push(i);
+      }
+    }
+    groundY += 0.5;
+  }
+
   function buildLevel() {
     resizeCanvas();
-    cell = pickCell();
-    cols = Math.ceil(imgW / cell);
-    rows = Math.ceil(imgH / cell);
 
     const pad = 12;
     const paddleSpace = 92;
@@ -663,64 +926,80 @@
     const availH = H - pad * 2 - paddleSpace;
     const mechScale = level().mechScale != null ? level().mechScale : 1;
     const fit = Math.min(availW / imgW, availH / imgH) * mechScale;
-    cellScreen = cell * fit;
-    // Cubrir todo el grid sin huecos al fondo
-    brickPx = Math.max(3.5, cellScreen + 0.6);
     originX = (W - imgW * fit) / 2;
     // Con mech más chico, bajar un poco para que los pies queden cerca del suelo
-    // Si vuela (L4), dejarlo más alto: pies sobre la franja de nubes
+    // Si vuela (L4/L5), dejarlo más alto: pies sobre la franja de nubes
     const unusedH = availH - imgH * fit;
     const yBias = level().fly ? 0.28 : 0.55;
     originY = pad + 6 + Math.max(0, unusedH * yBias);
-
-    bricks = [];
-    grid = new Int32Array(cols * rows);
-    grid.fill(-1);
-    groundY = 0;
-    minIy = rows;
-    maxIy = 0;
-
-    for (let iy = 0; iy < rows; iy++) {
-      for (let ix = 0; ix < cols; ix++) {
-        if (bricks.length >= MAX_BRICKS) break;
-        const c = avgCell(ix, iy, cell);
-        if (!c) continue;
-        minIy = Math.min(minIy, iy);
-        maxIy = Math.max(maxIy, iy);
-        const maxHp = 1; // 1 golpe
-        const bx = originX + ix * cellScreen;
-        const by = originY + iy * cellScreen;
-        const br = {
-          ix, iy,
-          baseX: bx,
-          baseY: by,
-          x: bx,
-          y: by,
-          w: brickPx,
-          h: brickPx,
-          color: `rgb(${c.r},${c.g},${c.b})`,
-          hp: maxHp,
-          maxHp,
-          alive: true,
-          falling: false,
-          settled: false,
-          vx: 0,
-          vy: 0,
-        };
-        groundY = Math.max(groundY, br.y + br.h);
-        grid[iy * cols + ix] = bricks.length;
-        bricks.push(br);
-      }
-    }
-    // Suelo justo bajo los pies
-    groundY += 0.5;
+    fitScale = fit;
     structureDX = 0;
     structureDVX = 0;
     structureDY = 0;
     structureDVY = 0;
-    fitScale = fit;
 
-    if (level().irregularBricks) mergeIrregularBricks();
+    bricks = [];
+    groundY = 0;
+
+    if (level().panels) {
+      cell = Math.max(2, Math.floor(Math.min(imgW, imgH) / 180));
+      cols = Math.ceil(imgW / cell);
+      rows = Math.ceil(imgH / cell);
+      grid = new Int32Array(cols * rows);
+      grid.fill(-1);
+      cellScreen = cell * fit;
+      brickPx = Math.max(10, cellScreen * 2.2);
+      minIy = rows;
+      maxIy = 0;
+      buildPanels(fit);
+    } else {
+      cell = pickCell();
+      cols = Math.ceil(imgW / cell);
+      rows = Math.ceil(imgH / cell);
+      cellScreen = cell * fit;
+      // Cubrir todo el grid sin huecos al fondo
+      brickPx = Math.max(3.5, cellScreen + 0.6);
+      grid = new Int32Array(cols * rows);
+      grid.fill(-1);
+      minIy = rows;
+      maxIy = 0;
+
+      for (let iy = 0; iy < rows; iy++) {
+        for (let ix = 0; ix < cols; ix++) {
+          if (bricks.length >= MAX_BRICKS) break;
+          const c = avgCell(ix, iy, cell);
+          if (!c) continue;
+          minIy = Math.min(minIy, iy);
+          maxIy = Math.max(maxIy, iy);
+          const maxHp = 1; // 1 golpe
+          const bx = originX + ix * cellScreen;
+          const by = originY + iy * cellScreen;
+          const br = {
+            ix, iy,
+            baseX: bx,
+            baseY: by,
+            x: bx,
+            y: by,
+            w: brickPx,
+            h: brickPx,
+            color: `rgb(${c.r},${c.g},${c.b})`,
+            hp: maxHp,
+            maxHp,
+            alive: true,
+            falling: false,
+            settled: false,
+            vx: 0,
+            vy: 0,
+          };
+          groundY = Math.max(groundY, br.y + br.h);
+          grid[iy * cols + ix] = bricks.length;
+          bricks.push(br);
+        }
+      }
+      // Suelo justo bajo los pies
+      groundY += 0.5;
+      if (level().irregularBricks) mergeIrregularBricks();
+    }
 
     brickLayer = document.createElement('canvas');
     brickLayer.width = Math.floor(W * dpr);
@@ -731,6 +1010,7 @@
     for (const br of bricks) drawBrickToLayer(br);
 
     structureCount = bricks.length;
+    structureStartCount = structureCount;
     aliveCount = bricks.length;
     particles = [];
     bombs = [];
@@ -936,8 +1216,11 @@
     br.alive = false;
     br.falling = false;
     if (wasStructure) {
-      const id = grid[br.iy * cols + br.ix];
-      clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
+      if (!br.panel && grid) {
+        const gi = br.iy * cols + br.ix;
+        const id = (gi >= 0 && gi < grid.length) ? grid[gi] : -1;
+        clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
+      }
     }
     score += pts;
     drawBrickToLayer(br);
@@ -988,10 +1271,13 @@
     for (const br of hitList) {
       spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, 5);
       const wasStructure = !br.falling;
-      const id = grid[br.iy * cols + br.ix];
       br.alive = false;
       br.falling = false;
-      if (wasStructure) clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
+      if (wasStructure && !br.panel && grid) {
+        const gi = br.iy * cols + br.ix;
+        const id = (gi >= 0 && gi < grid.length) ? grid[gi] : -1;
+        clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
+      }
       score += pts;
       drawBrickToLayer(br);
     }
@@ -1020,42 +1306,65 @@
     });
   }
 
-  function collideBricksWithBall() {
-    const ox = originX + structureDX;
-    const oy = originY + structureDY;
-    const ix0 = Math.floor((ball.x - ball.r - ox) / cellScreen) - 1;
-    const iy0 = Math.floor((ball.y - ball.r - oy) / cellScreen) - 1;
-    const ix1 = Math.floor((ball.x + ball.r - ox) / cellScreen) + 1;
-    const iy1 = Math.floor((ball.y + ball.r - oy) / cellScreen) + 1;
+  function collideCircleAABB(cx, cy, cr, br) {
+    const nx = Math.max(br.x, Math.min(cx, br.x + br.w));
+    const ny = Math.max(br.y, Math.min(cy, br.y + br.h));
+    const dx = cx - nx;
+    const dy = cy - ny;
+    return dx * dx + dy * dy <= cr * cr;
+  }
 
+  function bounceFlagsForHit(cx, cy, cr, br) {
+    const oL = (cx + cr) - br.x;
+    const oR = (br.x + br.w) - (cx - cr);
+    const oT = (cy + cr) - br.y;
+    const oB = (br.y + br.h) - (cy - cr);
+    if (Math.min(oL, oR) < Math.min(oT, oB)) return { bounceX: true, bounceY: false };
+    return { bounceX: false, bounceY: true };
+  }
+
+  function collideBricksWithBall() {
     let hit = null;
     let bounceX = false;
     let bounceY = false;
 
-    for (let iy = iy0; iy <= iy1; iy++) {
-      if (iy < 0 || iy >= rows) continue;
-      for (let ix = ix0; ix <= ix1; ix++) {
-        if (ix < 0 || ix >= cols) continue;
-        const id = grid[iy * cols + ix];
-        if (id < 0) continue;
-        const br = bricks[id];
+    if (level().panels) {
+      for (let i = 0; i < bricks.length; i++) {
+        const br = bricks[i];
         if (!br.alive || br.falling || br.settled) continue;
-        const nx = Math.max(br.x, Math.min(ball.x, br.x + br.w));
-        const ny = Math.max(br.y, Math.min(ball.y, br.y + br.h));
-        const dx = ball.x - nx;
-        const dy = ball.y - ny;
-        if (dx * dx + dy * dy > ball.r * ball.r) continue;
-
+        if (!collideCircleAABB(ball.x, ball.y, ball.r, br)) continue;
         hit = br;
-        const oL = (ball.x + ball.r) - br.x;
-        const oR = (br.x + br.w) - (ball.x - ball.r);
-        const oT = (ball.y + ball.r) - br.y;
-        const oB = (br.y + br.h) - (ball.y - ball.r);
-        if (Math.min(oL, oR) < Math.min(oT, oB)) bounceX = true;
-        else bounceY = true;
+        const flags = bounceFlagsForHit(ball.x, ball.y, ball.r, br);
+        bounceX = flags.bounceX;
+        bounceY = flags.bounceY;
         break;
       }
-      if (hit) break;
+    } else {
+      const ox = originX + structureDX;
+      const oy = originY + structureDY;
+      const ix0 = Math.floor((ball.x - ball.r - ox) / cellScreen) - 1;
+      const iy0 = Math.floor((ball.y - ball.r - oy) / cellScreen) - 1;
+      const ix1 = Math.floor((ball.x + ball.r - ox) / cellScreen) + 1;
+      const iy1 = Math.floor((ball.y + ball.r - oy) / cellScreen) + 1;
+
+      for (let iy = iy0; iy <= iy1; iy++) {
+        if (iy < 0 || iy >= rows) continue;
+        for (let ix = ix0; ix <= ix1; ix++) {
+          if (ix < 0 || ix >= cols) continue;
+          const id = grid[iy * cols + ix];
+          if (id < 0) continue;
+          const br = bricks[id];
+          if (!br.alive || br.falling || br.settled) continue;
+          if (!collideCircleAABB(ball.x, ball.y, ball.r, br)) continue;
+
+          hit = br;
+          const flags = bounceFlagsForHit(ball.x, ball.y, ball.r, br);
+          bounceX = flags.bounceX;
+          bounceY = flags.bounceY;
+          break;
+        }
+        if (hit) break;
+      }
     }
 
     if (!hit) return;
@@ -1096,29 +1405,38 @@
       }
 
       if (b.reflected) {
-        const ox = originX + structureDX;
-        const oy = originY + structureDY;
-        const ix0 = Math.floor((b.x - b.r - ox) / cellScreen) - 1;
-        const iy0 = Math.floor((b.y - b.r - oy) / cellScreen) - 1;
-        const ix1 = Math.floor((b.x + b.r - ox) / cellScreen) + 1;
-        const iy1 = Math.floor((b.y + b.r - oy) / cellScreen) + 1;
         let struck = false;
-        for (let iy = iy0; iy <= iy1 && !struck; iy++) {
-          if (iy < 0 || iy >= rows) continue;
-          for (let ix = ix0; ix <= ix1; ix++) {
-            if (ix < 0 || ix >= cols) continue;
-            const id = grid[iy * cols + ix];
-            if (id < 0) continue;
-            const br = bricks[id];
+        if (level().panels) {
+          for (let i = 0; i < bricks.length && !struck; i++) {
+            const br = bricks[i];
             if (!br.alive || br.falling || br.settled) continue;
-            const nx = Math.max(br.x, Math.min(b.x, br.x + br.w));
-            const ny = Math.max(br.y, Math.min(b.y, br.y + br.h));
-            const dx = b.x - nx, dy = b.y - ny;
-            if (dx * dx + dy * dy <= b.r * b.r) {
+            if (collideCircleAABB(b.x, b.y, b.r, br)) {
               explodeAt(b.x, b.y);
               b.alive = false;
               struck = true;
-              break;
+            }
+          }
+        } else {
+          const ox = originX + structureDX;
+          const oy = originY + structureDY;
+          const ix0 = Math.floor((b.x - b.r - ox) / cellScreen) - 1;
+          const iy0 = Math.floor((b.y - b.r - oy) / cellScreen) - 1;
+          const ix1 = Math.floor((b.x + b.r - ox) / cellScreen) + 1;
+          const iy1 = Math.floor((b.y + b.r - oy) / cellScreen) + 1;
+          for (let iy = iy0; iy <= iy1 && !struck; iy++) {
+            if (iy < 0 || iy >= rows) continue;
+            for (let ix = ix0; ix <= ix1; ix++) {
+              if (ix < 0 || ix >= cols) continue;
+              const id = grid[iy * cols + ix];
+              if (id < 0) continue;
+              const br = bricks[id];
+              if (!br.alive || br.falling || br.settled) continue;
+              if (collideCircleAABB(b.x, b.y, b.r, br)) {
+                explodeAt(b.x, b.y);
+                b.alive = false;
+                struck = true;
+                break;
+              }
             }
           }
         }
@@ -1713,6 +2031,21 @@
       if (!br.alive) continue;
       if (!br.falling && !br.settled) continue;
       ctx.fillStyle = br.settled ? shade(br.color, 0.85) : br.color;
+      if (br.panel && br.poly && br.poly.length >= 3) {
+        const ox = br.x - br.baseX;
+        const oy = br.y - br.baseY;
+        ctx.beginPath();
+        ctx.moveTo(br.poly[0].x + ox, br.poly[0].y + oy);
+        for (let i = 1; i < br.poly.length; i++) {
+          ctx.lineTo(br.poly[i].x + ox, br.poly[i].y + oy);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = shade(br.color, 0.4);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        continue;
+      }
       ctx.fillRect(br.x - 0.3, br.y - 0.3, br.w + 0.6, br.h + 0.6);
     }
   }
@@ -1998,6 +2331,8 @@
   }
 
   function renderShop() {
+    const shopMoney = document.getElementById('shopMoney');
+    if (shopMoney) shopMoney.textContent = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
     const lvl = level().id;
     shopList.innerHTML = SHOP.filter((it) => {
       if (it.minLevel != null && lvl < it.minLevel) return false;
@@ -2028,6 +2363,8 @@
   }
 
   function renderPack() {
+    const packMoney = document.getElementById('packMoney');
+    if (packMoney) packMoney.textContent = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
     packSlots.textContent = `${backpack.length} / ${PACK_MAX} espacios`;
     if (!backpack.length) {
       packList.innerHTML = '<p class="sub">Vacía — compra algo en la tienda.</p>';
@@ -2108,8 +2445,20 @@
 
   function burnLaserColumn(x) {
     const half = Math.max(brickPx * 1.0, 8);
+    if (level().panels) {
+      for (let i = 0; i < bricks.length; i++) {
+        const br = bricks[i];
+        if (!br.alive || br.falling || br.settled) continue;
+        if (br.y + br.h < 0 || br.y >= paddle.y) continue;
+        // column intersects AABB
+        if (br.x > x + half || br.x + br.w < x - half) continue;
+        const cx = br.x + br.w / 2;
+        spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
+        destroyBrick(br, 1);
+      }
+      return;
+    }
     const ox = originX + structureDX;
-    const oy = originY + structureDY;
     const ix0 = Math.max(0, Math.floor((x - half - ox) / cellScreen) - 1);
     const ix1 = Math.min(cols - 1, Math.floor((x + half - ox) / cellScreen) + 1);
     for (let iy = 0; iy < rows; iy++) {
