@@ -12,11 +12,20 @@
 
   const MIN_BRICKS = 7000;
   const LEVELS = [
-    { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', paddleScale: 1.0 },
-    { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', paddleScale: 0.98 },
+    { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', bg: 'bg.jpg', paddleScale: 1.0, groundFrac: 0.93 },
+    { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80 },
   ];
-  let levelIndex = 0; // 0 = nivel 1
+  let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
+
+  const SHOP = [
+    { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 80 },
+    { id: 'laser', name: 'Pistola láser', desc: 'Rayo vertical que parte ladrillos', icon: '🔫', price: 120 },
+    { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 100 },
+    { id: 'bomb', name: 'Bomba', desc: 'Explosión grande en el mech', icon: '💣', price: 90 },
+    { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 110 },
+  ];
+  const PACK_MAX = 5;
   const MAX_BRICKS = 12000;
   const START_LIVES = 3;
   const BOMB_EVERY = 4.2;
@@ -44,6 +53,12 @@
   let bgT = 0;
   let bgDust = [];
   let bombs = [];
+  let paused = false;
+  let backpack = []; // ids de SHOP
+  let shieldCharges = 0;
+  let bigPaddleUntil = 0;
+  let basePaddleW = 0;
+  let minIy = 0, maxIy = 0;
   let bombTimer = 0;
   let structureCount = 0; // ladrillos aún en la estructura (no caídos)
   let outro = null; // null | 'slowmo' | 'done'
@@ -170,28 +185,52 @@
     ball.vy = 0;
   }
 
-  /** ¿Quién sigue conectado al suelo? Lo demás se cae. */
+  /** Soporte realista: toda la zona de pies es cimiento hasta que casi se destruye. */
   function recomputeSupport() {
     const n = bricks.length;
     const supported = new Uint8Array(n);
     const q = [];
-
+    const footCut = minIy + Math.floor((maxIy - minIy) * 0.80); // ~20% inferior = pies
+    let footAlive = 0;
+    let footTotal = 0;
+    for (let i = 0; i < n; i++) {
+      const br = bricks[i];
+      if (br.iy < footCut) continue;
+      footTotal++;
+      if (br.alive && !br.falling && !br.settled) footAlive++;
+    }
+    // Semillas: cualquier ladrillo de la zona de pies vivo (no basta romper 1 del pie izq.)
     for (let i = 0; i < n; i++) {
       const br = bricks[i];
       if (!br.alive || br.falling || br.settled) continue;
-      // Apoyado en el suelo (pies del mech)
-      if (br.y + br.h >= groundY - 2) {
+      const onFloor = br.y + br.h >= groundY - 2;
+      const inFeet = br.iy >= footCut;
+      if (onFloor || inFeet) {
         supported[i] = 1;
         q.push(i);
       }
     }
+    // Si quedan muy pocos pies (<12%), ya no sirven de cimiento amplio
+    if (footTotal > 0 && footAlive / footTotal < 0.12) {
+      // solo los que tocan el suelo cuentan
+      q.length = 0;
+      supported.fill(0);
+      for (let i = 0; i < n; i++) {
+        const br = bricks[i];
+        if (!br.alive || br.falling || br.settled) continue;
+        if (br.y + br.h >= groundY - 2) {
+          supported[i] = 1;
+          q.push(i);
+        }
+      }
+    }
 
-    // Propagar soporte por vecinos (arriba/abajo/izq/der)
+    // 8 vecinos = articulaciones más estables
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
     while (q.length) {
       const i = q.pop();
       const br = bricks[i];
-      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-      for (let d = 0; d < 4; d++) {
+      for (let d = 0; d < dirs.length; d++) {
         const nix = br.ix + dirs[d][0];
         const niy = br.iy + dirs[d][1];
         if (nix < 0 || niy < 0 || nix >= cols || niy >= rows) continue;
@@ -209,7 +248,6 @@
       const br = bricks[i];
       if (!br.alive || br.falling || br.settled) continue;
       if (supported[i]) continue;
-      // Sin camino al suelo → gravedad
       if (grid[br.iy * cols + br.ix] === i) grid[br.iy * cols + br.ix] = -1;
       br.falling = true;
       br.vx = (Math.random() - 0.5) * 0.55;
@@ -218,18 +256,17 @@
       detached++;
     }
 
-    // Contar estructura restante
     structureCount = 0;
     for (let i = 0; i < n; i++) {
       const br = bricks[i];
       if (br.alive && !br.falling && !br.settled) structureCount++;
     }
-    if (detached > 40) {
+    if (detached > 80) {
       hint.classList.add('show');
       hint.innerHTML = '<strong>¡Se derrumba!</strong><span>Sin soporte, cae al suelo</span>';
       clearTimeout(window.__hintHide);
       window.__hintHide = setTimeout(() => {
-        if (launched && !gameOver) hint.classList.remove('show');
+        if (launched && !gameOver && !paused) hint.classList.remove('show');
       }, 1400);
     }
     updateHud();
@@ -282,7 +319,7 @@
     loading.textContent = `Cargando ${level().name}…`;
     hint.classList.remove('show');
     try {
-      await loadImage();
+      await Promise.all([loadImage(), loadBg()]);
       buildLevel();
       loading.classList.add('hide');
     } catch (err) {
@@ -320,13 +357,17 @@
     grid = new Int32Array(cols * rows);
     grid.fill(-1);
     groundY = 0;
+    minIy = rows;
+    maxIy = 0;
 
     for (let iy = 0; iy < rows; iy++) {
       for (let ix = 0; ix < cols; ix++) {
         if (bricks.length >= MAX_BRICKS) break;
         const c = avgCell(ix, iy, cell);
         if (!c) continue;
-        const maxHp = 1; // nivel 1: todos 1 golpe
+        minIy = Math.min(minIy, iy);
+        maxIy = Math.max(maxIy, iy);
+        const maxHp = 1; // 1 golpe
         const br = {
           ix, iy,
           x: originX + ix * cellScreen,
@@ -385,10 +426,12 @@
     launched = false;
     updateHud();
 
-    const pw = Math.min(168, W * 0.42) * (level().paddleScale || 1);
-    const ph = Math.max(28, pw * (271 / 1030)); // proporción del arte
+    basePaddleW = Math.min(168, W * 0.42) * (level().paddleScale || 1);
+    const pw = basePaddleW;
+    const ph = Math.max(28, pw * (271 / 1030));
     paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
     paddleTrail = [];
+    bigPaddleUntil = 0;
 
     const diameter = Math.max(brickPx * 3.92, 12);
     ball = {
@@ -487,6 +530,13 @@
   }
 
   function loseLife() {
+    if (shieldCharges > 0) {
+      shieldCharges--;
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Escudo</strong><span>Daño bloqueado</span>';
+      setTimeout(() => { if (!paused) hint.classList.remove('show'); }, 900);
+      return;
+    }
     lives = Math.max(0, lives - 1);
     updateHud();
     if (checkGameOver()) return;
@@ -497,6 +547,10 @@
   }
 
   function loseQuarterLife() {
+    if (shieldCharges > 0) {
+      shieldCharges--;
+      return;
+    }
     lives = Math.max(0, +(lives - 0.25).toFixed(2));
     updateHud();
     checkGameOver();
@@ -748,6 +802,26 @@
 
   function update(dt) {
     if (!running) return;
+    if (paused) {
+      updateBg(dt * 0.3);
+      return;
+    }
+    // paleta grande temporal
+    if (bigPaddleUntil && performance.now() < bigPaddleUntil) {
+      const target = basePaddleW * 1.35;
+      if (Math.abs(paddle.w - target) > 0.5) {
+        const cx = paddle.x + paddle.w / 2;
+        paddle.w = target;
+        paddle.h = Math.max(28, paddle.w * (271 / 1030));
+        paddle.x = cx - paddle.w / 2;
+      }
+    } else if (bigPaddleUntil && performance.now() >= bigPaddleUntil) {
+      bigPaddleUntil = 0;
+      const cx = paddle.x + paddle.w / 2;
+      paddle.w = basePaddleW;
+      paddle.h = Math.max(28, paddle.w * (271 / 1030));
+      paddle.x = cx - paddle.w / 2;
+    }
     updateBg(dt);
 
     // Cámara lenta al derrumbe final
@@ -1004,7 +1078,7 @@
     }
     const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
     // Plaza/pavimento abajo (~92%): alineado con pies del mech (groundY)
-    const groundFrac = 0.93;
+    const groundFrac = level().groundFrac != null ? level().groundFrac : 0.93;
     const needH = Math.max(H * 1.35, (groundY + H * 0.45) / groundFrac);
     const scale = Math.max(W / iw, needH / ih) * 1.18;
     const dw = iw * scale, dh = ih * scale;
@@ -1086,6 +1160,7 @@
 
   function onDown(e) {
     e.preventDefault();
+    if (paused) return;
     pointerX = pointerPos(e).x;
     if (window.__gotoNext) { startNextLevel(); return; }
     if (!launched && !gameOver && !won) launch();
@@ -1107,7 +1182,7 @@
       levelIndex = 0;
       loading.classList.remove('hide');
       loading.textContent = 'Cargando Nivel 1…';
-      loadImage().then(() => { buildLevel(); loading.classList.add('hide'); });
+      Promise.all([loadImage(), loadBg()]).then(() => { buildLevel(); loading.classList.add('hide'); });
       return;
     }
     buildLevel();
@@ -1123,7 +1198,7 @@
       const img = new Image();
       img.onload = () => { bgImg = img; resolve(); };
       img.onerror = reject;
-      img.src = 'bg.jpg';
+      img.src = level().bg || 'bg.jpg';
     });
   }
 
@@ -1135,6 +1210,167 @@
       img.src = 'paddle.png';
     });
   }
+
+
+  // —— Pausa / Tienda / Mochila ——
+  const pauseOverlay = document.getElementById('pauseOverlay');
+  const shopOverlay = document.getElementById('shopOverlay');
+  const packOverlay = document.getElementById('packOverlay');
+  const shopList = document.getElementById('shopList');
+  const packList = document.getElementById('packList');
+  const packSlots = document.getElementById('packSlots');
+  const btnPause = document.getElementById('btnPause');
+
+  function setOverlay(el, on) {
+    el.classList.toggle('show', on);
+    el.setAttribute('aria-hidden', on ? 'false' : 'true');
+  }
+
+  function openPause() {
+    if (gameOver || outro === 'slowmo') return;
+    paused = true;
+    setOverlay(pauseOverlay, true);
+    setOverlay(shopOverlay, false);
+    setOverlay(packOverlay, false);
+  }
+  function closeAllMenus() {
+    paused = false;
+    setOverlay(pauseOverlay, false);
+    setOverlay(shopOverlay, false);
+    setOverlay(packOverlay, false);
+  }
+  function openShop() {
+    paused = true;
+    setOverlay(pauseOverlay, false);
+    setOverlay(packOverlay, false);
+    renderShop();
+    setOverlay(shopOverlay, true);
+  }
+  function openPack() {
+    paused = true;
+    setOverlay(pauseOverlay, false);
+    setOverlay(shopOverlay, false);
+    renderPack();
+    setOverlay(packOverlay, true);
+  }
+
+  function renderShop() {
+    shopList.innerHTML = SHOP.map((it) => {
+      const full = backpack.length >= PACK_MAX;
+      const broke = score < it.price;
+      const disabled = full || broke;
+      let why = '';
+      if (full) why = 'Mochila llena';
+      else if (broke) why = 'Sin fondos';
+      return `<div class="shop-item">
+        <div class="icon">${it.icon}</div>
+        <div class="info"><div class="name">${it.name}</div><div class="desc">${it.desc}</div></div>
+        <div class="price">$${it.price}</div>
+        <button type="button" data-buy="${it.id}" ${disabled ? 'disabled' : ''}>${disabled ? why : 'Comprar'}</button>
+      </div>`;
+    }).join('');
+    shopList.querySelectorAll('[data-buy]').forEach((btn) => {
+      btn.addEventListener('click', () => buyItem(btn.getAttribute('data-buy')));
+    });
+  }
+
+  function renderPack() {
+    packSlots.textContent = `${backpack.length} / ${PACK_MAX} espacios`;
+    if (!backpack.length) {
+      packList.innerHTML = '<p class="sub">Vacía — compra algo en la tienda.</p>';
+      return;
+    }
+    packList.innerHTML = backpack.map((id, idx) => {
+      const it = SHOP.find((s) => s.id === id);
+      if (!it) return '';
+      return `<div class="pack-item">
+        <div class="icon">${it.icon}</div>
+        <div class="info"><div class="name">${it.name}</div><div class="desc">${it.desc}</div></div>
+        <button type="button" data-use="${idx}">Usar</button>
+      </div>`;
+    }).join('');
+    packList.querySelectorAll('[data-use]').forEach((btn) => {
+      btn.addEventListener('click', () => useItem(+btn.getAttribute('data-use')));
+    });
+  }
+
+  function buyItem(id) {
+    const it = SHOP.find((s) => s.id === id);
+    if (!it) return;
+    if (backpack.length >= PACK_MAX) return;
+    if (score < it.price) return;
+    score -= it.price;
+    backpack.push(it.id);
+    updateHud();
+    renderShop();
+  }
+
+  function useItem(idx) {
+    if (idx < 0 || idx >= backpack.length) return;
+    const id = backpack[idx];
+    const it = SHOP.find((s) => s.id === id);
+    backpack.splice(idx, 1);
+    if (!it) { renderPack(); return; }
+    if (id === 'heart') {
+      lives = Math.min(START_LIVES + 1, +(lives + 1).toFixed(2));
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>❤️ +1 vida</strong><span>Usado desde la mochila</span>';
+    } else if (id === 'shield') {
+      shieldCharges++;
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>🛡️ Escudo listo</strong><span>Bloqueará el próximo daño</span>';
+    } else if (id === 'paddle') {
+      bigPaddleUntil = performance.now() + 20000;
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>📏 Paleta grande</strong><span>20 segundos</span>';
+    } else if (id === 'bomb') {
+      // explosión en el centro de la estructura viva
+      let sx = 0, sy = 0, n = 0;
+      for (const br of bricks) {
+        if (!br.alive || br.falling || br.settled) continue;
+        sx += br.x + br.w / 2; sy += br.y + br.h / 2; n++;
+      }
+      if (n) explodeAt(sx / n, sy / n);
+      else explodeAt(W / 2, H * 0.35);
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>💣 Bomba</strong><span>¡Boom!</span>';
+    } else if (id === 'laser') {
+      fireLaser();
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>🔫 Láser</strong><span>Rayo disparado</span>';
+    }
+    updateHud();
+    renderPack();
+    setTimeout(() => { if (!paused) hint.classList.remove('show'); }, 1200);
+  }
+
+  function fireLaser() {
+    // Rayo vertical desde el centro de la paleta hacia arriba
+    const x = paddle.x + paddle.w / 2;
+    const half = Math.max(brickPx * 1.2, 10);
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      const cx = br.x + br.w / 2;
+      if (Math.abs(cx - x) <= half && br.y + br.h >= 0 && br.y < paddle.y) {
+        spawnDust(cx, br.y + br.h / 2, br.color, 6);
+        destroyBrick(br, 12);
+      }
+    }
+    // flash
+    spawnDust(x, paddle.y - 40, 'rgb(120,220,255)', 24, { spread: 1.2, up: 4, long: true, big: true });
+  }
+
+  btnPause.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (paused && pauseOverlay.classList.contains('show')) closeAllMenus();
+    else openPause();
+  });
+  document.getElementById('btnResume').addEventListener('click', (e) => { e.stopPropagation(); closeAllMenus(); });
+  document.getElementById('btnShop').addEventListener('click', (e) => { e.stopPropagation(); openShop(); });
+  document.getElementById('btnPack').addEventListener('click', (e) => { e.stopPropagation(); openPack(); });
+  document.getElementById('btnShopBack').addEventListener('click', (e) => { e.stopPropagation(); openPause(); });
+  document.getElementById('btnPackBack').addEventListener('click', (e) => { e.stopPropagation(); openPause(); });
+
 
   (async function init() {
     try {

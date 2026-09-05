@@ -19,7 +19,7 @@
     #wrap { width: 100%; height: 100%; display: flex; flex-direction: column; }
     #hud {
       flex: 0 0 auto;
-      display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+      display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
       padding: 10px 12px;
       padding-top: max(10px, env(safe-area-inset-top));
       background: rgba(0,0,0,.55);
@@ -35,6 +35,7 @@
     }
     button.secondary { background: #3a3a42; }
     button:active { transform: scale(.97); opacity: .9; }
+    #btnPause { background: #2b6cb0; }
     #stage {
       flex: 1 1 auto;
       position: relative;
@@ -55,36 +56,20 @@
       filter: drop-shadow(0 1px 3px rgba(0,0,0,.75));
     }
     #score {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 16px;
-      font-weight: 700;
-      color: #b8f5c2;
-      letter-spacing: 0.02em;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 16px; font-weight: 700; color: #b8f5c2;
       text-shadow: 0 1px 4px rgba(0,0,0,.8);
     }
     #score .bills { font-size: 18px; line-height: 1; }
-    #lives {
-      display: flex;
-      gap: 6px;
-    }
-    .heart-wrap {
-      width: 22px; height: 20px;
-      position: relative;
-      display: inline-block;
-    }
+    #lives { display: flex; gap: 6px; }
+    .heart-wrap { width: 22px; height: 20px; position: relative; display: inline-block; }
     .heart-wrap::before {
-      content: "♥";
-      position: absolute; inset: 0;
-      font-size: 22px; line-height: 20px;
-      color: rgba(74, 10, 92, 0.22);
+      content: "♥"; position: absolute; inset: 0;
+      font-size: 22px; line-height: 20px; color: rgba(74, 10, 92, 0.22);
     }
     .heart-fill {
-      position: absolute; left: 0; top: 0; bottom: 0;
-      overflow: hidden;
-      font-size: 22px; line-height: 20px;
-      color: #4a0a5c;
+      position: absolute; left: 0; top: 0; bottom: 0; overflow: hidden;
+      font-size: 22px; line-height: 20px; color: #4a0a5c;
     }
     #hint {
       position: absolute; left: 50%; top: 55%;
@@ -103,6 +88,45 @@
       background: #1a0f08; z-index: 3; font-size: 15px;
     }
     #loading.hide { display: none; }
+
+    /* Pause / menus */
+    .overlay {
+      position: absolute; inset: 0; z-index: 20;
+      background: rgba(6, 8, 14, 0.72);
+      backdrop-filter: blur(6px);
+      display: none; align-items: center; justify-content: center;
+      padding: 16px;
+      pointer-events: auto;
+    }
+    .overlay.show { display: flex; }
+    .panel {
+      width: min(420px, 100%);
+      max-height: min(78vh, 640px);
+      overflow: auto;
+      background: #1a1f2b;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 16px;
+      padding: 18px 16px 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+    }
+    .panel h2 { font-size: 20px; margin-bottom: 6px; }
+    .panel .sub { font-size: 13px; opacity: .7; margin-bottom: 14px; }
+    .menu-btns { display: flex; flex-direction: column; gap: 8px; }
+    .menu-btns button { width: 100%; }
+    .shop-item, .pack-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px; border-radius: 12px;
+      background: rgba(255,255,255,.05);
+      margin-bottom: 8px;
+    }
+    .shop-item .icon, .pack-item .icon { font-size: 22px; width: 28px; text-align: center; }
+    .shop-item .info, .pack-item .info { flex: 1; min-width: 0; }
+    .shop-item .name, .pack-item .name { font-weight: 650; font-size: 14px; }
+    .shop-item .desc, .pack-item .desc { font-size: 12px; opacity: .7; }
+    .shop-item .price { font-weight: 700; color: #b8f5c2; font-size: 13px; margin-right: 6px; }
+    .shop-item button, .pack-item button { padding: 8px 12px; min-height: 36px; font-size: 13px; }
+    .back-row { margin-top: 10px; }
+    #packSlots { font-size: 12px; opacity: .75; margin-bottom: 10px; }
   </style>
 </head>
 <body>
@@ -110,6 +134,7 @@
     <div id="hud">
       <h1>Mech Arkanoid</h1>
       <span class="meta" id="count">—</span>
+      <button type="button" id="btnPause">Pausa</button>
       <button type="button" class="secondary" id="reset">Reiniciar</button>
     </div>
     <div id="stage">
@@ -120,6 +145,36 @@
       <div id="loading">Armando el campo…</div>
       <div id="hint"><strong>Desliza la paleta</strong><span>Toca para lanzar la bola</span></div>
       <canvas id="c"></canvas>
+
+      <div id="pauseOverlay" class="overlay" aria-hidden="true">
+        <div class="panel">
+          <h2>Pausa</h2>
+          <p class="sub">Partida en espera</p>
+          <div class="menu-btns">
+            <button type="button" id="btnResume">Continuar</button>
+            <button type="button" class="secondary" id="btnShop">Tienda</button>
+            <button type="button" class="secondary" id="btnPack">Mochila</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="shopOverlay" class="overlay" aria-hidden="true">
+        <div class="panel">
+          <h2>Tienda</h2>
+          <p class="sub">Se guarda en la mochila (máx. 5)</p>
+          <div id="shopList"></div>
+          <div class="back-row"><button type="button" class="secondary" id="btnShopBack">Volver</button></div>
+        </div>
+      </div>
+
+      <div id="packOverlay" class="overlay" aria-hidden="true">
+        <div class="panel">
+          <h2>Mochila</h2>
+          <p id="packSlots" class="sub">0 / 5 espacios</p>
+          <div id="packList"></div>
+          <div class="back-row"><button type="button" class="secondary" id="btnPackBack">Volver</button></div>
+        </div>
+      </div>
     </div>
   </div>
   <script src="game.js"></script>
