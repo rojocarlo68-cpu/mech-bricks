@@ -17,7 +17,7 @@
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
     { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
-    { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', waves: 3, paddleScale: 0.9027, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.02, brickDamageMult: 1.2 },
+    { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', bgC: 'bg-level6c.jpg', waves: 3, paddleScale: 0.8846, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.0404, brickDamageMult: 1.2 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -131,14 +131,17 @@
   let deathGlitch = 0; // TV glitch timer on game over
   let gameOverHintPending = false;
   let bgImgB = null;
+  let bgImgC = null;
   let structures = []; // multi-mech: each is a captured structure snapshot
   // L6 rook trio phase (after pawn waves)
   let l6RookStarted = false;
   let l6RooksSpawned = 0;
-  let l6Phase = 'pawns'; // 'pawns' | 'rooks'
+  let l6Phase = 'pawns'; // 'pawns' | 'rooks' | 'chess'
   let l6RookMode = null; // null | 'wall' | 'scatter'
   let l6RookModeTimer = 0;
   let l6RookOrder = []; // permutation of living rook indices for wall slots
+  let l6ChessStarted = false;
+  let l6ChessSpawned = 0;
 
   function size() {
     return {
@@ -719,6 +722,14 @@
       l6RookPhase();
       return;
     }
+    // L6 rooks cleared → chess knights (do not finish level yet)
+    if (level().id === 6 && l6RookStarted && !l6ChessStarted) {
+      outro = null;
+      outroT = 0;
+      window.__outroDust = false;
+      l6ChessTransition();
+      return;
+    }
     outro = 'done';
     launched = false;
     bombs = [];
@@ -763,11 +774,13 @@
     if (structureCount > 0) return;
     // L6: wave 1 clear → finishOutro → l6PhaseTransition (camera + waves 2–3).
     // After wave 2+, wait for remaining pawn spawns before rook phase.
-    // Rook phase: wait until all 3 rooks spawned before true win.
+    // Rook phase: wait until all 3 rooks spawned, then chess (not win).
+    // Chess phase: wait until both knights spawned, then real win.
     if (level().id === 6 && !l6RookStarted) {
       if (l6Wave > 1 && (l6Wave < 3 || l6PendingSpawn)) return;
     }
-    if (level().id === 6 && l6RookStarted && l6RooksSpawned < 3) return;
+    if (level().id === 6 && l6RookStarted && !l6ChessStarted && l6RooksSpawned < 3) return;
+    if (level().id === 6 && l6ChessStarted && l6ChessSpawned < 2) return;
     // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria / L6 transit
     if (countFalling() > 0) startSlowMoOutro();
     else finishOutro();
@@ -919,13 +932,17 @@
     outro = null;
     bumpCam(5);
     // Head-turn right: longer, smoother yaw (~1.4s) — not a flip
-    l6CamFX = { t: 0, dur: 1.4, swapped: false };
+    l6CamFX = { t: 0, dur: 1.4, swapped: false, nextImg: bgImgB, nextSrc: level().bgB, kind: 'pawns' };
     hint.classList.add('show');
     hint.innerHTML = '<strong>¿Qué…?</strong><span>Volteas la mirada…</span>';
     try {
       if (!bgImgB && level().bgB) bgImgB = await loadBgSrc(level().bgB);
     } catch (e) {
       console.warn('bg-level6b', e);
+    }
+    if (l6CamFX) {
+      l6CamFX.nextImg = bgImgB;
+      l6CamFX.nextSrc = level().bgB;
     }
   }
 
@@ -937,13 +954,28 @@
     // Swap bg once the ruined corridor has mostly wiped in from the right
     if (e >= 0.55 && !l6CamFX.swapped) {
       l6CamFX.swapped = true;
-      if (bgImgB) bgImg = bgImgB;
-      if (level().bgB) level().bg = level().bgB;
+      if (l6CamFX.nextImg) bgImg = l6CamFX.nextImg;
+      if (l6CamFX.nextSrc) level().bg = l6CamFX.nextSrc;
     }
     if (u < 1) return;
 
+    const transitKind = l6CamFX.kind || 'pawns';
     l6Transit = false;
     l6CamFX = null;
+    if (transitKind === 'chess') {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Caballeros!</strong><span>¡Dos mechs caballo!</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => {
+        if (launched && !gameOver && !paused && !l6Transit) hint.classList.remove('show');
+      }, 2200);
+      if (ball && paddle) {
+        stickBallToPaddle();
+        launched = false;
+      }
+      l6ChessPhase();
+      return;
+    }
     hint.classList.add('show');
     hint.innerHTML = '<strong>¡Oh no! ¡Hay otro!</strong><span>¡Destrúyelos a todos!</span>';
     clearTimeout(window.__hintHide);
@@ -1178,6 +1210,105 @@
       }, 2000);
     } catch (e) {
       console.warn('l6RookPhase', e);
+    }
+  }
+
+  async function l6ChessTransition() {
+    if (l6Transit || l6ChessStarted) return;
+    l6ChessStarted = true;
+    l6Transit = true;
+    clearL6Timers();
+    bombs = [];
+    playerBomb = null;
+    if (ball) { ball.vx = 0; ball.vy = 0; }
+    launched = false;
+    outro = null;
+    bumpCam(5);
+    // Second head-turn right — slightly longer, looking into the ruined hall
+    l6CamFX = { t: 0, dur: 1.55, swapped: false, nextImg: bgImgC, nextSrc: level().bgC, kind: 'chess' };
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¿Otra vez…?</strong><span>Volteas la mirada…</span>';
+    try {
+      if (!bgImgC && level().bgC) bgImgC = await loadBgSrc(level().bgC);
+    } catch (e) {
+      console.warn('bg-level6c', e);
+    }
+    if (l6CamFX) {
+      l6CamFX.nextImg = bgImgC;
+      l6CamFX.nextSrc = level().bgC;
+    }
+  }
+
+  async function spawnL6Knight(opts) {
+    opts = opts || {};
+    await loadMechSrc(opts.src || 'mech-level6-knight.png');
+    const side = opts.side || (Math.random() < 0.5 ? 'left' : 'right');
+    const scale = opts.mechScale != null ? opts.mechScale : 0.42;
+    const S = buildStructureInstance({ side, mechScale: scale });
+    S.l6Knight = true;
+    const desiredCx = W * (side === 'left' ? 0.32 : 0.68);
+    S.homeDX = desiredCx - structureBaseCenterX(S);
+    return S;
+  }
+
+  async function l6ChessPhase() {
+    if (l6Phase === 'chess' && l6ChessSpawned > 0) return;
+    l6ChessStarted = true;
+    l6Phase = 'chess';
+    l6ChessSpawned = 0;
+    l6RookMode = null;
+    l6RookModeTimer = 0;
+    clearL6Timers();
+    bombs = [];
+    playerBomb = null;
+    structures = [];
+    structureCount = 0;
+    outro = null;
+    outroT = 0;
+    launched = false;
+    bumpCam(4);
+
+    try {
+      const k1 = await spawnL6Knight({ src: 'mech-level6-knight.png', side: 'left', mechScale: 0.42 });
+      if (level().id !== 6 || !l6ChessStarted || won || gameOver) return;
+      structures = [k1];
+      l6ChessSpawned = 1;
+      applyStructure(k1);
+      refreshTotalStructureCount();
+      aliveCount = k1.bricks.length;
+      updateHud();
+      bumpCam(3.5);
+      if (ball && paddle) {
+        stickBallToPaddle();
+        launched = false;
+      }
+
+      clearL6Timers();
+      l6PendingSpawn = setTimeout(() => {
+        l6PendingSpawn = null;
+        if (level().id !== 6 || !l6ChessStarted || won || gameOver) return;
+        hint.classList.add('show');
+        hint.innerHTML = '<strong>¡Y el otro!</strong><span>Dos caballeros</span>';
+        clearTimeout(window.__hintHide);
+        window.__hintHide = setTimeout(() => {
+          if (launched && !gameOver && !paused && !l6Transit) hint.classList.remove('show');
+        }, 2000);
+
+        (async () => {
+          const k2 = await spawnL6Knight({ src: 'mech-level6-knight2.png', side: 'right', mechScale: 0.43 });
+          if (level().id !== 6 || !l6ChessStarted || won || gameOver) return;
+          structures.push(k2);
+          l6ChessSpawned = 2;
+          applyStructure(structures[0]);
+          refreshTotalStructureCount();
+          aliveCount = 0;
+          for (const st of structures) aliveCount += st.bricks.length;
+          updateHud();
+          bumpCam(3.6);
+        })().catch((e) => console.warn('l6 knight2', e));
+      }, 1600);
+    } catch (e) {
+      console.warn('l6ChessPhase', e);
     }
   }
 
@@ -1536,6 +1667,8 @@
     l6RookMode = null;
     l6RookModeTimer = 0;
     l6RookOrder = [];
+    l6ChessStarted = false;
+    l6ChessSpawned = 0;
     // Reset L6 primary bg if we swapped to ruined corridor
     if (LEVELS[5] && LEVELS[5].bgB) LEVELS[5].bg = 'bg-level6.jpg';
 
@@ -1804,6 +1937,21 @@
 
   function syncCrackIntensity() {
     crackIntensity = Math.max(0, Math.min(1, 1 - lives / START_LIVES));
+  }
+
+  function syncDamageFxFromLives() {
+    const prev = crackIntensity;
+    crackIntensity = Math.max(0, Math.min(1, 1 - lives / START_LIVES));
+    if (lives >= START_LIVES) {
+      cracks = [];
+      crackIntensity = 0;
+      hurtFlash = 0;
+      return;
+    }
+    if (crackIntensity < prev && cracks.length) {
+      const keep = Math.floor(cracks.length * crackIntensity / Math.max(prev, 0.01));
+      cracks.length = keep;
+    }
   }
 
   function addCrackBurst(impactX, impactY, count) {
@@ -2430,6 +2578,57 @@
     }
   }
 
+  function currentL6Structure() {
+    if (!structures.length) return null;
+    for (const S of structures) {
+      if (S.bricks === bricks) return S;
+    }
+    return null;
+  }
+
+  function otherKnightWorldCx() {
+    if (l6Phase !== 'chess') return null;
+    for (const S of structures) {
+      if (S.bricks === bricks) continue;
+      if ((S.structureCount | 0) <= 0) continue;
+      return structureBaseCenterX(S) + (S.structureDX || 0);
+    }
+    return null;
+  }
+
+  function applyKnightSeparation(step) {
+    if (l6Phase !== 'chess' || structures.length < 2) return;
+    let minX = Infinity, maxX = -Infinity, n = 0;
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      minX = Math.min(minX, br.x);
+      maxX = Math.max(maxX, br.x + br.w);
+      n++;
+    }
+    if (!n) return;
+    const minGap = 56;
+    for (const S of structures) {
+      if (S.bricks === bricks || (S.structureCount | 0) <= 0) continue;
+      let omin = Infinity, omax = -Infinity, on = 0;
+      for (const br of S.bricks) {
+        if (!br.alive || br.falling || br.settled) continue;
+        omin = Math.min(omin, br.x);
+        omax = Math.max(omax, br.x + br.w);
+        on++;
+      }
+      if (!on) continue;
+      const overlap = Math.min(maxX, omax) - Math.max(minX, omin);
+      if (overlap > -minGap) {
+        const myCx = (minX + maxX) / 2;
+        const oCx = (omin + omax) / 2;
+        const dir = myCx < oCx ? -1 : (myCx > oCx ? 1 : 1);
+        const push = (overlap + minGap) * 0.085;
+        structureDVX += dir * push * step;
+        structureDVX = Math.max(-4.5, Math.min(4.5, structureDVX));
+      }
+    }
+  }
+
   function updateJumpAI(dt) {
     const step = dt * 60;
     jumpCooldown = Math.max(0, jumpCooldown - dt);
@@ -2452,7 +2651,12 @@
         structureDY = 0;
         structureDVY *= 0.85;
         // Walk/hop toward wall slot (rook) or center if spawned off-screen
-        const idleTarget = (l6Phase === 'rooks' && l6RookMode === 'wall') ? jumpTargetDX : 0;
+        let idleTarget = 0;
+        if (l6Phase === 'rooks' && l6RookMode === 'wall') idleTarget = jumpTargetDX;
+        else if (l6Phase === 'chess') {
+          const me = currentL6Structure();
+          if (me && me.homeDX != null) idleTarget = me.homeDX;
+        }
         if (Math.abs(structureDX - idleTarget) > 14) {
           structureDVX += (idleTarget - structureDX) * 0.035 * step;
           structureDVX *= 0.94;
@@ -2580,6 +2784,26 @@
       const maxDX = W - 6 - mechW - originX;
       const minDX = 6 - originX;
       jumpTargetDX = Math.max(minDX, Math.min(maxDX, jumpTargetDX));
+      if (l6Phase === 'chess') {
+        const otherCx = otherKnightWorldCx();
+        if (otherCx != null) {
+          const destCx = cx + (jumpTargetDX - structureDX);
+          const minSep = halfW + 70;
+          if (Math.abs(destCx - otherCx) < minSep) {
+            dir = destCx >= otherCx ? 1 : -1;
+            if (dir < 0 && roomL < 50 && roomR > roomL) dir = 1;
+            if (dir > 0 && roomR < 50 && roomL > roomR) dir = -1;
+            jumpTargetDX = structureDX + dir * hopDist;
+            jumpTargetDX = Math.max(minDX, Math.min(maxDX, jumpTargetDX));
+            const dest2 = cx + (jumpTargetDX - structureDX);
+            if (Math.abs(dest2 - otherCx) < minSep) {
+              const away = (cx < otherCx ? -1 : 1) * (minSep + 20);
+              jumpTargetDX = structureDX + (otherCx + away - cx);
+              jumpTargetDX = Math.max(minDX, Math.min(maxDX, jumpTargetDX));
+            }
+          }
+        }
+      }
 
       const heightPx = 42 + Math.random() * 28; // ~40–70
       // v0 ≈ -sqrt(2 * G * h) in per-frame units
@@ -2608,12 +2832,17 @@
         jumpPhase = 'ground';
       }
     } else {
-      // Ground idle: gentle return toward center DX
+      // Ground idle: gentle return toward home (knights) or center
       structureDY = 0;
       structureDVY = 0;
       structureDVX *= 0.9;
-      if (Math.abs(structureDX) > 10) {
-        structureDVX += (structureDX > 0 ? -0.22 : 0.22) * step * 0.35;
+      let idleX = 0;
+      if (l6Phase === 'chess') {
+        const me = currentL6Structure();
+        if (me && me.homeDX != null) idleX = me.homeDX;
+      }
+      if (Math.abs(structureDX - idleX) > 10) {
+        structureDVX += (structureDX > idleX ? -0.22 : 0.22) * step * 0.35;
       }
       structureDX += structureDVX * step;
     }
@@ -2621,9 +2850,11 @@
     structureAV *= 0.8;
     structureAngle *= 0.9;
 
-    const left = originX + structureDX;
+    applyKnightSeparation(step);
+
+    const leftB = originX + structureDX;
     const right = originX + imgW * fitScale + structureDX;
-    if (left < 6) { structureDX += 6 - left; structureDVX = Math.abs(structureDVX) * 0.4; }
+    if (leftB < 6) { structureDX += 6 - leftB; structureDVX = Math.abs(structureDVX) * 0.4; }
     if (right > W - 6) { structureDX -= right - (W - 6); structureDVX = -Math.abs(structureDVX) * 0.4; }
 
     applyStructureOffset();
@@ -2926,7 +3157,9 @@
     bombTimer -= dt;
     if (bombTimer <= 0) {
       spawnBomb();
-      bombTimer = BOMB_EVERY + Math.random() * 1.8;
+      const every = (l6Phase === 'chess') ? BOMB_EVERY * 0.5 : BOMB_EVERY;
+      const jitter = (l6Phase === 'chess') ? 0.9 : 1.8;
+      bombTimer = every + Math.random() * jitter;
     }
     updateBombs(dt);
     updatePlayerBomb(dt);
@@ -3366,7 +3599,7 @@
     const dy = groundY - groundFrac * dh + brickPx * 0.5;
     ctx.drawImage(bgImg, dx, dy, dw, dh);
     // L6 head-turn: ruined corridor wipes in from the right (looking right)
-    if (l6CamFX && bgImgB && !l6CamFX.swapped) {
+    if (l6CamFX && l6CamFX.nextImg && !l6CamFX.swapped) {
       const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
       const e = l6EaseInOut(u);
       const wipe = Math.max(0, Math.min(1, (e - 0.18) / 0.52));
@@ -3378,7 +3611,7 @@
         ctx.clip();
         const slideIn = (1 - wipe) * W * 0.22;
         ctx.globalAlpha = Math.min(1, 0.35 + wipe * 0.65);
-        ctx.drawImage(bgImgB, dx + slideIn, dy, dw, dh);
+        ctx.drawImage(l6CamFX.nextImg, dx + slideIn, dy, dw, dh);
         ctx.restore();
         // Soft edge of the wipe
         if (wipe < 0.98) {
@@ -3608,12 +3841,19 @@
       const img = new Image();
       img.onload = () => {
         bgImg = img;
+        const loads = [];
         if (level().bgB) {
-          loadBgSrc(level().bgB).then((b) => { bgImgB = b; resolve(); }).catch(() => resolve());
+          loads.push(loadBgSrc(level().bgB).then((b) => { bgImgB = b; }).catch(() => {}));
         } else {
           bgImgB = null;
-          resolve();
         }
+        if (level().bgC) {
+          loads.push(loadBgSrc(level().bgC).then((c) => { bgImgC = c; }).catch(() => {}));
+        } else {
+          bgImgC = null;
+        }
+        if (loads.length) Promise.all(loads).then(() => resolve());
+        else resolve();
       };
       img.onerror = reject;
       img.src = level().bg || 'bg.jpg';
@@ -3787,6 +4027,7 @@
     if (!it) { renderPack(); return; }
     if (id === 'heart') {
       lives = Math.min(START_LIVES + 1, +(lives + 1).toFixed(2));
+      syncDamageFxFromLives();
       hint.classList.add('show');
       hint.innerHTML = '<strong>❤️ +1 vida</strong><span>Usado desde la mochila</span>';
     } else if (id === 'shield') {
