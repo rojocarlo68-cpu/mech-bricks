@@ -33,7 +33,7 @@
 
   const SHOP = [
     { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 1080 },
-    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · ráfagas + enfriamiento', icon: '🔫', price: 1120 },
+    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · ráfagas + enfriamiento', icon: '🔫', price: 4120 },
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
     { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 1090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
@@ -126,6 +126,13 @@
   let l6CamFX = null; // { t, dur, swapped }
   let bgImgB = null;
   let structures = []; // multi-mech: each is a captured structure snapshot
+  // L6 rook trio phase (after pawn waves)
+  let l6RookStarted = false;
+  let l6RooksSpawned = 0;
+  let l6Phase = 'pawns'; // 'pawns' | 'rooks'
+  let l6RookMode = null; // null | 'wall' | 'scatter'
+  let l6RookModeTimer = 0;
+  let l6RookOrder = []; // permutation of living rook indices for wall slots
 
   function size() {
     return {
@@ -163,7 +170,7 @@
     return { r: (r / n) | 0, g: (g / n) | 0, b: (b / n) | 0 };
   }
 
-  function loadImage() {
+  function loadMechSrc(src) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
@@ -181,8 +188,12 @@
         resolve();
       };
       img.onerror = reject;
-      img.src = level().mech;
+      img.src = src;
     });
+  }
+
+  function loadImage() {
+    return loadMechSrc(level().mech);
   }
 
   function pickCell() {
@@ -694,6 +705,14 @@
       l6PhaseTransition();
       return;
     }
+    // L6 pawn extras cleared → rook trio (do not finish level yet)
+    if (level().id === 6 && l6Wave >= 3 && !l6RookStarted) {
+      outro = null;
+      outroT = 0;
+      window.__outroDust = false;
+      l6RookPhase();
+      return;
+    }
     outro = 'done';
     launched = false;
     bombs = [];
@@ -736,6 +755,9 @@
     if (won || gameOver || outro === 'done' || l6Transit) return;
     refreshTotalStructureCount();
     if (structureCount > 0) return;
+    // L6: wait for remaining pawn / rook spawns before win / next phase
+    if (level().id === 6 && !l6RookStarted && (l6Wave < 3 || l6PendingSpawn)) return;
+    if (level().id === 6 && l6RookStarted && l6RooksSpawned < 3) return;
     // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria / L6 transit
     if (countFalling() > 0) startSlowMoOutro();
     else finishOutro();
@@ -842,7 +864,9 @@
     const paddleSpace = 92;
     const availW = W - pad * 2;
     const availH = H - pad * 2 - paddleSpace;
-    const mechScale = level().mechScale != null ? level().mechScale : 1;
+    const mechScale = opts.mechScale != null
+      ? opts.mechScale
+      : (level().mechScale != null ? level().mechScale : 1);
     const fit = Math.min(availW / imgW, availH / imgH) * mechScale;
     const ox = (W - imgW * fit) / 2;
     const unusedH = availH - imgH * fit;
@@ -946,6 +970,198 @@
     for (const st of structures) aliveCount += st.bricks.length;
     updateHud();
     bumpCam(3.5);
+  }
+
+  function structureBaseCenterX(S) {
+    let minX = Infinity, maxX = -Infinity, n = 0;
+    for (const br of S.bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      const bx = br.baseX != null ? br.baseX : br.x;
+      minX = Math.min(minX, bx);
+      maxX = Math.max(maxX, bx + br.w);
+      n++;
+    }
+    if (!n) return S.originX + (imgW * S.fitScale) / 2;
+    return (minX + maxX) / 2;
+  }
+
+  function structureAliveWidth(S) {
+    let minX = Infinity, maxX = -Infinity, n = 0;
+    for (const br of S.bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      const bx = br.baseX != null ? br.baseX : br.x;
+      minX = Math.min(minX, bx);
+      maxX = Math.max(maxX, bx + br.w);
+      n++;
+    }
+    if (!n) return imgW * S.fitScale;
+    return Math.max(24, maxX - minX);
+  }
+
+  function livingL6Structures() {
+    return structures.filter((S) => (S.structureCount | 0) > 0);
+  }
+
+  function assignL6WallTargets(permute) {
+    const alive = livingL6Structures();
+    if (!alive.length) return;
+    const widths = alive.map(structureAliveWidth);
+    const avgW = widths.reduce((a, b) => a + b, 0) / widths.length;
+    const spacing = avgW * 0.95;
+    const totalSpan = spacing * Math.max(0, alive.length - 1);
+    const leftCenter = W / 2 - totalSpan / 2;
+
+    let order = alive.map((_, i) => i);
+    if (permute && order.length > 1) {
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = (Math.random() * (i + 1)) | 0;
+        const t = order[i]; order[i] = order[j]; order[j] = t;
+      }
+    } else if (l6RookOrder.length === alive.length) {
+      // keep prior permutation if still valid length
+      order = l6RookOrder.slice();
+    }
+    l6RookOrder = order.slice();
+
+    for (let slot = 0; slot < order.length; slot++) {
+      const S = alive[order[slot]];
+      const desiredCx = leftCenter + slot * spacing;
+      const cxBase = structureBaseCenterX(S);
+      S.jumpTargetDX = desiredCx - cxBase;
+      S.wallSlot = slot;
+    }
+  }
+
+  function beginL6WallMode(permute) {
+    l6RookMode = 'wall';
+    l6RookModeTimer = 2 + Math.random() * 2; // hold wall ~2–4s
+    assignL6WallTargets(!!permute);
+  }
+
+  function beginL6ScatterMode() {
+    l6RookMode = 'scatter';
+    l6RookModeTimer = 10;
+  }
+
+  function updateL6RookFormation(dt) {
+    if (level().id !== 6 || !l6RookStarted || l6Phase !== 'rooks') return;
+    if (won || gameOver || outro || l6Transit) return;
+    if (l6RooksSpawned < 3) return;
+
+    const alive = livingL6Structures();
+    if (!alive.length) return;
+
+    if (!l6RookMode) beginL6WallMode(false);
+
+    l6RookModeTimer -= dt;
+    if (l6RookMode === 'wall') {
+      // keep targets fresh if a rook died mid-wall
+      if (alive.length !== l6RookOrder.length) assignL6WallTargets(false);
+      if (l6RookModeTimer <= 0) beginL6ScatterMode();
+    } else if (l6RookMode === 'scatter') {
+      if (l6RookModeTimer <= 0) beginL6WallMode(true);
+    }
+  }
+
+  async function spawnL6Rook(opts) {
+    opts = opts || {};
+    await loadMechSrc('mech-level6-rook.png');
+    // Slightly smaller than pawn waves so 3 fit shoulder-to-shoulder
+    const side = opts.side || (Math.random() < 0.5 ? 'left' : 'right');
+    const S = buildStructureInstance({ side, mechScale: 0.40 });
+    return S;
+  }
+
+  async function l6RookPhase() {
+    if (l6RookStarted) return;
+    l6RookStarted = true;
+    l6Phase = 'rooks';
+    l6RooksSpawned = 0;
+    l6RookMode = null;
+    l6RookModeTimer = 0;
+    l6RookOrder = [];
+    clearL6Timers();
+    bombs = [];
+    playerBomb = null;
+    structures = [];
+    structureCount = 0;
+    outro = null;
+    outroT = 0;
+    launched = false;
+    bumpCam(4);
+
+    try {
+      const r1 = await spawnL6Rook({ side: Math.random() < 0.5 ? 'left' : 'right' });
+      if (level().id !== 6 || !l6RookStarted || won || gameOver) return;
+      structures = [r1];
+      l6RooksSpawned = 1;
+      applyStructure(r1);
+      refreshTotalStructureCount();
+      aliveCount = r1.bricks.length;
+      updateHud();
+      bumpCam(3.5);
+      if (ball && paddle) {
+        stickBallToPaddle();
+        launched = false;
+      }
+
+      clearL6Timers();
+      l6PendingSpawn = setTimeout(() => {
+        l6PendingSpawn = null;
+        if (level().id !== 6 || !l6RookStarted || won || gameOver) return;
+        hint.classList.add('show');
+        hint.innerHTML = '<strong>¡Oh no…!</strong><span>¿Más mechs?</span>';
+        clearTimeout(window.__hintHide);
+        window.__hintHide = setTimeout(() => {
+          if (launched && !gameOver && !paused && !l6Transit) hint.classList.remove('show');
+        }, 2000);
+
+        (async () => {
+          const side2 = structures[0] && structures[0].structureDX > 0 ? 'left' : 'right';
+          const r2 = await spawnL6Rook({ side: side2 });
+          if (level().id !== 6 || !l6RookStarted || won || gameOver) return;
+          structures.push(r2);
+          l6RooksSpawned = 2;
+          applyStructure(structures[0]);
+          refreshTotalStructureCount();
+          aliveCount = 0;
+          for (const st of structures) aliveCount += st.bricks.length;
+          updateHud();
+          bumpCam(3.2);
+
+          clearL6Timers();
+          l6PendingSpawn = setTimeout(() => {
+            l6PendingSpawn = null;
+            if (level().id !== 6 || !l6RookStarted || won || gameOver) return;
+            hint.classList.add('show');
+            hint.innerHTML = '<strong>¿es en serio?</strong><span>¡Tres torres!</span>';
+            clearTimeout(window.__hintHide);
+            window.__hintHide = setTimeout(() => {
+              if (launched && !gameOver && !paused && !l6Transit) hint.classList.remove('show');
+            }, 2200);
+
+            (async () => {
+              const side3 = structures.length >= 2
+                ? (structures[0].structureDX + structures[1].structureDX > 0 ? 'left' : 'right')
+                : 'right';
+              const r3 = await spawnL6Rook({ side: side3 });
+              if (level().id !== 6 || !l6RookStarted || won || gameOver) return;
+              structures.push(r3);
+              l6RooksSpawned = 3;
+              applyStructure(structures[0]);
+              refreshTotalStructureCount();
+              aliveCount = 0;
+              for (const st of structures) aliveCount += st.bricks.length;
+              updateHud();
+              bumpCam(4);
+              beginL6WallMode(false);
+            })().catch((e) => console.warn('l6 rook3', e));
+          }, 5000);
+        })().catch((e) => console.warn('l6 rook2', e));
+      }, 2000);
+    } catch (e) {
+      console.warn('l6RookPhase', e);
+    }
   }
 
 
@@ -1296,6 +1512,12 @@
     l6Transit = false;
     l6CamFX = null;
     structures = [];
+    l6RookStarted = false;
+    l6RooksSpawned = 0;
+    l6Phase = 'pawns';
+    l6RookMode = null;
+    l6RookModeTimer = 0;
+    l6RookOrder = [];
     // Reset L6 primary bg if we swapped to ruined corridor
     if (LEVELS[5] && LEVELS[5].bgB) LEVELS[5].bg = 'bg-level6.jpg';
 
@@ -2027,9 +2249,10 @@
       } else {
         structureDY = 0;
         structureDVY *= 0.85;
-        // Walk/hop toward center if spawned off-screen
-        if (Math.abs(structureDX) > 14) {
-          structureDVX += (0 - structureDX) * 0.035 * step;
+        // Walk/hop toward wall slot (rook) or center if spawned off-screen
+        const idleTarget = (l6Phase === 'rooks' && l6RookMode === 'wall') ? jumpTargetDX : 0;
+        if (Math.abs(structureDX - idleTarget) > 14) {
+          structureDVX += (idleTarget - structureDX) * 0.035 * step;
           structureDVX *= 0.94;
           structureDX += structureDVX * step;
         } else {
@@ -2082,6 +2305,62 @@
     }
 
     const onGround = jumpPhase === 'ground' && structureDY >= -0.5;
+
+    // Rook wall formation: hop/hold toward assigned shoulder slot
+    if (l6Phase === 'rooks' && l6RookMode === 'wall') {
+      const mechW = imgW * fitScale;
+      const maxDX = W - 6 - mechW - originX;
+      const minDX = 6 - originX;
+      jumpTargetDX = Math.max(minDX, Math.min(maxDX, jumpTargetDX));
+      const err = jumpTargetDX - structureDX;
+
+      if (onGround && jumpCooldown <= 0 && Math.abs(err) > 16) {
+        const heightPx = 34 + Math.random() * 22;
+        structureDVY = -Math.sqrt(Math.max(8, 2 * G * heightPx));
+        structureDVX = err / 16;
+        structureDVX = Math.max(-4.5, Math.min(4.5, structureDVX));
+        jumpPhase = 'up';
+        jumpCooldown = 0.5 + Math.random() * 0.3;
+      } else if (onGround) {
+        structureDY = 0;
+        structureDVY = 0;
+        structureDVX *= 0.82;
+        structureDVX += Math.max(-0.45, Math.min(0.45, err * 0.05)) * step;
+        structureDX += structureDVX * step;
+        structureAV *= 0.8;
+        structureAngle *= 0.9;
+        const leftW = originX + structureDX;
+        const rightW = originX + mechW + structureDX;
+        if (leftW < 6) { structureDX += 6 - leftW; structureDVX = Math.abs(structureDVX) * 0.35; }
+        if (rightW > W - 6) { structureDX -= rightW - (W - 6); structureDVX = -Math.abs(structureDVX) * 0.35; }
+        applyStructureOffset();
+        return;
+      }
+
+      if (jumpPhase !== 'ground' || structureDY < -0.01) {
+        structureDVY += G * 0.92 * step;
+        structureDY += structureDVY * step;
+        structureDX += structureDVX * step;
+        const errAir = jumpTargetDX - structureDX;
+        structureDVX += Math.max(-0.4, Math.min(0.4, errAir * 0.05)) * step;
+        structureDVX *= 0.992;
+        if (structureDVY > 0 && jumpPhase === 'up') jumpPhase = 'down';
+        if (structureDY >= 0) {
+          structureDY = 0;
+          structureDVY = 0;
+          structureDVX *= 0.28;
+          jumpPhase = 'ground';
+        }
+      }
+      structureAV *= 0.8;
+      structureAngle *= 0.9;
+      const left = originX + structureDX;
+      const right = originX + mechW + structureDX;
+      if (left < 6) { structureDX += 6 - left; structureDVX = Math.abs(structureDVX) * 0.4; }
+      if (right > W - 6) { structureDX -= right - (W - 6); structureDVX = -Math.abs(structureDVX) * 0.4; }
+      applyStructureOffset();
+      return;
+    }
 
     if (onGround && jumpCooldown <= 0 && threat > 0.08) {
       let dir = predX < cx ? 1 : -1;
@@ -2340,6 +2619,7 @@
       paddle.x = cx - paddle.w / 2;
     }
     updateBg(dt);
+    updateL6RookFormation(dt);
     updateDodgeAI(dt);
 
     // Cámara lenta al derrumbe final
