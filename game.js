@@ -15,6 +15,7 @@
     { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', bg: 'bg.jpg', paddleScale: 1.0, groundFrac: 0.93, dodge: false },
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false },
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7 },
+    { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.88, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -31,7 +32,7 @@
     { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 1080 },
     { id: 'laser', name: 'Pistola láser', desc: 'Rayo vertical que parte ladrillos', icon: '🔫', price: 1120 },
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
-    { id: 'bomb', name: 'Bomba', desc: 'Explosión grande en el mech', icon: '💣', price: 1090 },
+    { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 1090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
     { id: 'ballskin', name: 'Bola grabada', desc: 'Skin de bola · dureza +10%', icon: '🪩', price: 26799, minLevel: 3, img: 'ball-skin.png' },
   ];
@@ -61,6 +62,8 @@
   let paddleTrail = []; // estela azul
   let bombImg = null;
   let bombArmedImg = null;
+  let bombPlayerImg = null;
+  let bombPlayerArmedImg = null;
   let bgImg = null;
   let bgT = 0;
   let bgDust = [];
@@ -74,6 +77,10 @@
   let camShake = 0; // cámara ansiosa / agitada
   let structureDX = 0;
   let structureDVX = 0;
+  let structureDY = 0;
+  let structureDVY = 0;
+  let playerBombArmed = false;
+  let playerBomb = null;
   let fitScale = 1;
   let ballSkinImg = null;
   let ballSkinOn = false;
@@ -204,61 +211,120 @@
     ball.vy = 0;
   }
 
-  /** Soporte realista: toda la zona de pies es cimiento hasta que casi se destruye. */
+  function brickCells(br) {
+    return br.cells || [{ ix: br.ix, iy: br.iy }];
+  }
+
+  function clearBrickGrid(br, id) {
+    for (const c of brickCells(br)) {
+      const gi = c.iy * cols + c.ix;
+      if (grid[gi] === id) grid[gi] = -1;
+    }
+  }
+
+  function forEachNeighborBrick(br, fn) {
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const seen = Object.create(null);
+    for (const c of brickCells(br)) {
+      for (let d = 0; d < dirs.length; d++) {
+        const nix = c.ix + dirs[d][0];
+        const niy = c.iy + dirs[d][1];
+        if (nix < 0 || niy < 0 || nix >= cols || niy >= rows) continue;
+        const id = grid[niy * cols + nix];
+        if (id < 0 || seen[id]) continue;
+        seen[id] = 1;
+        fn(id);
+      }
+    }
+  }
+
+  function brickBottomIy(br) {
+    let m = br.iy;
+    for (const c of brickCells(br)) m = Math.max(m, c.iy);
+    return m;
+  }
+
+  /** Soporte realista: toda la zona de pies es cimiento hasta que casi se destruye.
+   *  Con fly:true, el núcleo flotante = componente conexa más grande (sin exigir piso). */
   function recomputeSupport() {
     const n = bricks.length;
     const supported = new Uint8Array(n);
     const q = [];
     const footCut = minIy + Math.floor((maxIy - minIy) * 0.80); // ~20% inferior = pies
-    let footAlive = 0;
-    let footTotal = 0;
-    for (let i = 0; i < n; i++) {
-      const br = bricks[i];
-      if (br.iy < footCut) continue;
-      footTotal++;
-      if (br.alive && !br.falling && !br.settled) footAlive++;
-    }
-    // Semillas: cualquier ladrillo de la zona de pies vivo (no basta romper 1 del pie izq.)
-    for (let i = 0; i < n; i++) {
-      const br = bricks[i];
-      if (!br.alive || br.falling || br.settled) continue;
-      const onFloor = br.y + br.h >= groundY - 2;
-      const inFeet = br.iy >= footCut;
-      if (onFloor || inFeet) {
-        supported[i] = 1;
-        q.push(i);
-      }
-    }
-    // Si quedan muy pocos pies (<12%), ya no sirven de cimiento amplio
-    if (footTotal > 0 && footAlive / footTotal < 0.12) {
-      // solo los que tocan el suelo cuentan
-      q.length = 0;
-      supported.fill(0);
+
+    if (level().fly) {
+      const comp = new Int32Array(n);
+      comp.fill(-1);
+      let bestSize = 0;
+      let bestRoot = -1;
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
-        if (!br.alive || br.falling || br.settled) continue;
-        if (br.y + br.h >= groundY - 2) {
+        if (!br.alive || br.falling || br.settled || comp[i] >= 0) continue;
+        const stack = [i];
+        comp[i] = i;
+        let size = 0;
+        while (stack.length) {
+          const cur = stack.pop();
+          size++;
+          forEachNeighborBrick(bricks[cur], (id) => {
+            const nb = bricks[id];
+            if (!nb.alive || nb.falling || nb.settled || comp[id] >= 0) return;
+            comp[id] = i;
+            stack.push(id);
+          });
+        }
+        if (size > bestSize) { bestSize = size; bestRoot = i; }
+      }
+      for (let i = 0; i < n; i++) {
+        if (comp[i] === bestRoot && bestRoot >= 0) {
           supported[i] = 1;
           q.push(i);
         }
       }
-    }
+    } else {
+      let footAlive = 0;
+      let footTotal = 0;
+      for (let i = 0; i < n; i++) {
+        const br = bricks[i];
+        if (brickBottomIy(br) < footCut) continue;
+        footTotal++;
+        if (br.alive && !br.falling && !br.settled) footAlive++;
+      }
+      // Semillas: cualquier ladrillo de la zona de pies vivo (no basta romper 1 del pie izq.)
+      for (let i = 0; i < n; i++) {
+        const br = bricks[i];
+        if (!br.alive || br.falling || br.settled) continue;
+        const onFloor = br.y + br.h >= groundY - 2;
+        const inFeet = brickBottomIy(br) >= footCut;
+        if (onFloor || inFeet) {
+          supported[i] = 1;
+          q.push(i);
+        }
+      }
+      // Si quedan muy pocos pies (<12%), ya no sirven de cimiento amplio
+      if (footTotal > 0 && footAlive / footTotal < 0.12) {
+        q.length = 0;
+        supported.fill(0);
+        for (let i = 0; i < n; i++) {
+          const br = bricks[i];
+          if (!br.alive || br.falling || br.settled) continue;
+          if (br.y + br.h >= groundY - 2) {
+            supported[i] = 1;
+            q.push(i);
+          }
+        }
+      }
 
-    // 8 vecinos = articulaciones más estables
-    const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
-    while (q.length) {
-      const i = q.pop();
-      const br = bricks[i];
-      for (let d = 0; d < dirs.length; d++) {
-        const nix = br.ix + dirs[d][0];
-        const niy = br.iy + dirs[d][1];
-        if (nix < 0 || niy < 0 || nix >= cols || niy >= rows) continue;
-        const id = grid[niy * cols + nix];
-        if (id < 0 || supported[id]) continue;
-        const nb = bricks[id];
-        if (!nb.alive || nb.falling || nb.settled) continue;
-        supported[id] = 1;
-        q.push(id);
+      // 8 vecinos = articulaciones más estables
+      while (q.length) {
+        const i = q.pop();
+        forEachNeighborBrick(bricks[i], (id) => {
+          if (supported[id]) return;
+          const nb = bricks[id];
+          if (!nb.alive || nb.falling || nb.settled) return;
+          supported[id] = 1;
+          q.push(id);
+        });
       }
     }
 
@@ -267,7 +333,7 @@
       const br = bricks[i];
       if (!br.alive || br.falling || br.settled) continue;
       if (supported[i]) continue;
-      if (grid[br.iy * cols + br.ix] === i) grid[br.iy * cols + br.ix] = -1;
+      clearBrickGrid(br, i);
       br.falling = true;
       br.vx = (Math.random() - 0.5) * 0.55;
       br.vy = 0.15 + Math.random() * 0.35;
@@ -380,6 +446,104 @@
     else finishOutro();
   }
 
+  function mergeIrregularBricks() {
+    // Fusiona ~18% de semillas en ladrillos 2x2 / 2x1 / 1x2 / 3x2 (AABB opacos)
+    const shapes = [
+      { cw: 2, ch: 2 },
+      { cw: 2, ch: 1 },
+      { cw: 1, ch: 2 },
+      { cw: 3, ch: 2 },
+      { cw: 2, ch: 3 },
+      { cw: 3, ch: 1 },
+    ];
+    const order = bricks.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      const t = order[i]; order[i] = order[j]; order[j] = t;
+    }
+    const claimed = new Uint8Array(cols * rows);
+    const keep = new Array(bricks.length).fill(true);
+    let mergeSeeds = 0;
+    const seedBudget = Math.max(1, (bricks.length * 0.18) | 0);
+
+    for (const bi of order) {
+      if (mergeSeeds >= seedBudget) break;
+      if (!keep[bi]) continue;
+      const seed = bricks[bi];
+      if (claimed[seed.iy * cols + seed.ix]) continue;
+      const sh = shapes[(Math.random() * shapes.length) | 0];
+      const cells = [];
+      let ok = true;
+      for (let dy = 0; dy < sh.ch && ok; dy++) {
+        for (let dx = 0; dx < sh.cw; dx++) {
+          const ix = seed.ix + dx;
+          const iy = seed.iy + dy;
+          if (ix < 0 || iy < 0 || ix >= cols || iy >= rows) { ok = false; break; }
+          const gi = iy * cols + ix;
+          if (claimed[gi]) { ok = false; break; }
+          const id = grid[gi];
+          if (id < 0 || !keep[id]) { ok = false; break; }
+          const ob = bricks[id];
+          if (!ob.alive || (ob.cells && ob.cells.length > 1)) { ok = false; break; }
+          cells.push({ ix, iy, id });
+        }
+      }
+      if (!ok || cells.length < 2) continue;
+
+      // Promedio de color
+      let r = 0, g = 0, b = 0, n = 0;
+      for (const c of cells) {
+        const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(bricks[c.id].color);
+        if (m) { r += +m[1]; g += +m[2]; b += +m[3]; n++; }
+      }
+      const color = n ? `rgb(${(r / n) | 0},${(g / n) | 0},${(b / n) | 0})` : seed.color;
+      const bx = originX + seed.ix * cellScreen;
+      const by = originY + seed.iy * cellScreen;
+      const primary = bricks[bi];
+      primary.cells = cells.map((c) => ({ ix: c.ix, iy: c.iy }));
+      primary.cw = sh.cw;
+      primary.ch = sh.ch;
+      primary.baseX = bx;
+      primary.baseY = by;
+      primary.x = bx;
+      primary.y = by;
+      primary.w = sh.cw * cellScreen + (brickPx - cellScreen);
+      primary.h = sh.ch * cellScreen + (brickPx - cellScreen);
+      primary.color = color;
+      for (const c of cells) {
+        claimed[c.iy * cols + c.ix] = 1;
+        if (c.id !== bi) keep[c.id] = false;
+      }
+      mergeSeeds++;
+    }
+
+    // Rebuild bricks + grid (solo keep)
+    const old = bricks;
+    const map = new Int32Array(old.length);
+    map.fill(-1);
+    bricks = [];
+    for (let i = 0; i < old.length; i++) {
+      if (!keep[i]) continue;
+      map[i] = bricks.length;
+      bricks.push(old[i]);
+    }
+    grid.fill(-1);
+    groundY = 0;
+    minIy = rows;
+    maxIy = 0;
+    for (let i = 0; i < bricks.length; i++) {
+      const br = bricks[i];
+      const cells = brickCells(br);
+      for (const c of cells) {
+        grid[c.iy * cols + c.ix] = i;
+        minIy = Math.min(minIy, c.iy);
+        maxIy = Math.max(maxIy, c.iy);
+      }
+      groundY = Math.max(groundY, br.baseY + br.h);
+    }
+    groundY += 0.5;
+  }
+
   function buildLevel() {
     resizeCanvas();
     cell = pickCell();
@@ -397,8 +561,10 @@
     brickPx = Math.max(3.5, cellScreen + 0.6);
     originX = (W - imgW * fit) / 2;
     // Con mech más chico, bajar un poco para que los pies queden cerca del suelo
+    // Si vuela (L4), dejarlo más alto: pies sobre la franja de nubes
     const unusedH = availH - imgH * fit;
-    originY = pad + 6 + Math.max(0, unusedH * 0.55);
+    const yBias = level().fly ? 0.28 : 0.55;
+    originY = pad + 6 + Math.max(0, unusedH * yBias);
 
     bricks = [];
     grid = new Int32Array(cols * rows);
@@ -443,7 +609,11 @@
     groundY += 0.5;
     structureDX = 0;
     structureDVX = 0;
+    structureDY = 0;
+    structureDVY = 0;
     fitScale = fit;
+
+    if (level().irregularBricks) mergeIrregularBricks();
 
     brickLayer = document.createElement('canvas');
     brickLayer.width = Math.floor(W * dpr);
@@ -457,6 +627,9 @@
     aliveCount = bricks.length;
     particles = [];
     bombs = [];
+    playerBomb = null;
+    playerBombArmed = false;
+    setBombButton(false);
     bombTimer = 2.5;
     score = 0;
     lives = START_LIVES;
@@ -618,8 +791,9 @@
     const wasStructure = !br.falling;
     br.alive = false;
     br.falling = false;
-    if (wasStructure && grid[br.iy * cols + br.ix] >= 0) {
-      grid[br.iy * cols + br.ix] = -1;
+    if (wasStructure) {
+      const id = grid[br.iy * cols + br.ix];
+      clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
     }
     score += pts;
     drawBrickToLayer(br);
@@ -651,11 +825,13 @@
     ball.speed = boost;
   }
 
-  function explodeAt(x, y) {
-    bumpCam(5.5);
-    const r2 = EXPLODE_R * EXPLODE_R;
-    spawnDust(x, y, 'rgb(255,120,40)', 40);
-    spawnDust(x, y, 'rgb(80,80,80)', 24);
+  function explodeAt(x, y, radius, ptsPerBrick) {
+    bumpCam(radius && radius > EXPLODE_R ? 7.2 : 5.5);
+    const R = radius != null ? radius : EXPLODE_R;
+    const pts = ptsPerBrick != null ? ptsPerBrick : 15;
+    const r2 = R * R;
+    spawnDust(x, y, 'rgb(255,120,40)', radius && radius > EXPLODE_R ? 56 : 40);
+    spawnDust(x, y, 'rgb(80,80,80)', radius && radius > EXPLODE_R ? 36 : 24);
     const hitList = [];
     for (const br of bricks) {
       if (!br.alive || br.settled) continue;
@@ -668,10 +844,11 @@
     for (const br of hitList) {
       spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, 5);
       const wasStructure = !br.falling;
+      const id = grid[br.iy * cols + br.ix];
       br.alive = false;
       br.falling = false;
-      if (wasStructure && grid[br.iy * cols + br.ix] >= 0) grid[br.iy * cols + br.ix] = -1;
-      score += 15;
+      if (wasStructure) clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
+      score += pts;
       drawBrickToLayer(br);
     }
     recomputeSupport();
@@ -701,10 +878,11 @@
 
   function collideBricksWithBall() {
     const ox = originX + structureDX;
+    const oy = originY + structureDY;
     const ix0 = Math.floor((ball.x - ball.r - ox) / cellScreen) - 1;
-    const iy0 = Math.floor((ball.y - ball.r - originY) / cellScreen) - 1;
+    const iy0 = Math.floor((ball.y - ball.r - oy) / cellScreen) - 1;
     const ix1 = Math.floor((ball.x + ball.r - ox) / cellScreen) + 1;
-    const iy1 = Math.floor((ball.y + ball.r - originY) / cellScreen) + 1;
+    const iy1 = Math.floor((ball.y + ball.r - oy) / cellScreen) + 1;
 
     let hit = null;
     let bounceX = false;
@@ -774,10 +952,11 @@
 
       if (b.reflected) {
         const ox = originX + structureDX;
+        const oy = originY + structureDY;
         const ix0 = Math.floor((b.x - b.r - ox) / cellScreen) - 1;
-        const iy0 = Math.floor((b.y - b.r - originY) / cellScreen) - 1;
+        const iy0 = Math.floor((b.y - b.r - oy) / cellScreen) - 1;
         const ix1 = Math.floor((b.x + b.r - ox) / cellScreen) + 1;
-        const iy1 = Math.floor((b.y + b.r - originY) / cellScreen) + 1;
+        const iy1 = Math.floor((b.y + b.r - oy) / cellScreen) + 1;
         let struck = false;
         for (let iy = iy0; iy <= iy1 && !struck; iy++) {
           if (iy < 0 || iy >= rows) continue;
@@ -870,15 +1049,18 @@
     for (const br of bricks) {
       if (!br.alive || br.falling || br.settled) continue;
       br.x = br.baseX + structureDX;
-      br.y = br.baseY;
+      br.y = br.baseY + structureDY;
     }
   }
 
   function updateDodgeAI(dt) {
-    if (!level().dodge || !launched || gameOver || won || outro) {
+    const canMove = level().dodge || level().fly;
+    if (!canMove || !launched || gameOver || won || outro) {
       structureDVX *= 0.9;
+      structureDVY *= 0.9;
       return;
     }
+    const flying = !!level().fly;
     // Centro actual del mech
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, n = 0;
     for (const br of bricks) {
@@ -891,43 +1073,63 @@
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const halfW = (maxX - minX) / 2;
+    const halfH = (maxY - minY) / 2;
 
-    // Predecir X de la bola cuando cruce la altura del mech
+    // Predecir trayectoria de la bola hacia el mech (2D si vuela)
     let threat = 0;
     let predX = ball.x;
-    if (ball.vy < -0.05 && ball.y > minY) {
-      const frames = (ball.y - cy) / Math.max(0.05, -ball.vy);
-      if (frames > 0 && frames < 90) {
-        predX = ball.x + ball.vx * frames;
-        // rebotes simples en paredes
-        let px = predX, pvx = ball.vx;
-        for (let f = 0; f < Math.min(60, frames); f++) {
-          px += pvx;
+    let predY = ball.y;
+    const approaching = flying
+      ? (Math.hypot(ball.x - cx, ball.y - cy) < Math.max(halfW, halfH) + 140)
+      : (ball.vy < -0.05 && ball.y > minY);
+    if (approaching || (ball.vy < -0.05 && ball.y > minY)) {
+      const frames = flying
+        ? Math.hypot(ball.x - cx, ball.y - cy) / Math.max(0.08, Math.hypot(ball.vx, ball.vy))
+        : (ball.y - cy) / Math.max(0.05, -ball.vy);
+      if (frames > 0 && frames < 100) {
+        let px = ball.x, py = ball.y, pvx = ball.vx, pvy = ball.vy;
+        const steps = Math.min(70, frames | 0);
+        for (let f = 0; f < steps; f++) {
+          px += pvx; py += pvy;
           if (px < ball.r) { px = ball.r; pvx = Math.abs(pvx); }
           if (px > W - ball.r) { px = W - ball.r; pvx = -Math.abs(pvx); }
+          if (flying) {
+            if (py < ball.r) { py = ball.r; pvy = Math.abs(pvy); }
+            if (py > H - 40) { py = H - 40; pvy = -Math.abs(pvy); }
+          }
         }
-        predX = px;
-        const dist = Math.abs(predX - cx);
-        if (dist < halfW + ball.r + 40) threat = 1.0 - dist / (halfW + 120);
+        predX = px; predY = py;
+        const dist = flying
+          ? Math.hypot(predX - cx, predY - cy)
+          : Math.abs(predX - cx);
+        const reach = flying ? (Math.max(halfW, halfH) + ball.r + 50) : (halfW + ball.r + 40);
+        if (dist < reach) threat = 1.0 - dist / (reach + 80);
       }
     } else if (Math.hypot(ball.x - cx, ball.y - cy) < halfW + 80 && ball.y < maxY + 40) {
-      predX = ball.x;
+      predX = ball.x; predY = ball.y;
       threat = 0.55;
     }
 
     let desired = 0;
+    let desiredY = 0;
     if (threat > 0.05) {
-      // Escapar: alejarse del impacto predicho
       desired = (predX < cx) ? 1 : -1;
-      // Si está casi centrado, elige el lado con más espacio
       if (Math.abs(predX - cx) < 12) {
         const roomL = cx - halfW - 8;
         const roomR = W - 8 - (cx + halfW);
         desired = roomR > roomL ? 1 : -1;
       }
+      if (flying) {
+        desiredY = (predY < cy) ? 1 : -1;
+        if (Math.abs(predY - cy) < 10) {
+          const roomU = cy - halfH - 8;
+          const roomD = (H - 110) - (cy + halfH);
+          desiredY = roomD > roomU ? 1 : -1;
+        }
+      }
     } else {
-      // Volver al centro con pereza
       desired = structureDX > 8 ? -0.35 : structureDX < -8 ? 0.35 : 0;
+      if (flying) desiredY = structureDY > 8 ? -0.35 : structureDY < -8 ? 0.35 : 0;
     }
 
     const accel = 0.55 + threat * 1.1;
@@ -936,14 +1138,30 @@
     structureDVX = Math.max(-6.5, Math.min(6.5, structureDVX));
     structureDX += structureDVX * dt * 60;
 
+    if (flying) {
+      const accelY = 0.42 + threat * 0.95;
+      structureDVY += desiredY * accelY * dt * 60;
+      structureDVY *= 0.91;
+      structureDVY = Math.max(-5.2, Math.min(5.2, structureDVY));
+      structureDY += structureDVY * dt * 60;
+    } else {
+      structureDVY *= 0.85;
+      structureDY *= 0.9;
+    }
+
     // Límites: que no se salga de pantalla
-    const structW = maxX - minX;
-    const maxDX = Math.max(0, (W - structW) / 2 - 6);
-    // base is centered; DX relative
     const left = originX + structureDX;
     const right = originX + imgW * fitScale + structureDX;
     if (left < 6) { structureDX += 6 - left; structureDVX = Math.abs(structureDVX) * 0.4; }
     if (right > W - 6) { structureDX -= right - (W - 6); structureDVX = -Math.abs(structureDVX) * 0.4; }
+
+    if (flying) {
+      const top = originY + structureDY;
+      const bottom = originY + imgH * fitScale + structureDY;
+      if (top < 8) { structureDY += 8 - top; structureDVY = Math.abs(structureDVY) * 0.4; }
+      const maxBottom = H - 100;
+      if (bottom > maxBottom) { structureDY -= bottom - maxBottom; structureDVY = -Math.abs(structureDVY) * 0.4; }
+    }
 
     applyStructureOffset();
   }
@@ -1072,6 +1290,7 @@
       bombTimer = BOMB_EVERY + Math.random() * 1.8;
     }
     updateBombs(dt);
+    updatePlayerBomb(dt);
 
     const steps = 3;
     for (let s = 0; s < steps; s++) {
@@ -1183,6 +1402,64 @@
     ctx.stroke();
   }
 
+  function setBombButton(on) {
+    const btn = document.getElementById('btnBomb');
+    if (!btn) return;
+    btn.classList.toggle('show', !!on);
+    btn.setAttribute('aria-hidden', on ? 'false' : 'true');
+  }
+
+  function updatePlayerBomb(dt) {
+    if (!playerBomb || !playerBomb.alive) return;
+    playerBomb.t += dt;
+    playerBomb.x += playerBomb.vx * dt * 60;
+    playerBomb.y += playerBomb.vy * dt * 60;
+    // leve deriva
+    playerBomb.vy += 0.04 * dt * 60;
+
+    if (playerBomb.x - playerBomb.r < 0) { playerBomb.x = playerBomb.r; playerBomb.vx = Math.abs(playerBomb.vx); }
+    if (playerBomb.x + playerBomb.r > W) { playerBomb.x = W - playerBomb.r; playerBomb.vx = -Math.abs(playerBomb.vx); }
+    if (playerBomb.y - playerBomb.r < 0) { playerBomb.y = playerBomb.r; playerBomb.vy = Math.abs(playerBomb.vy); }
+
+    if (playerBomb.phase === 'fuse' && playerBomb.t >= 3) {
+      playerBomb.phase = 'armed';
+      playerBomb.t = 0;
+      bumpCam(1.2);
+    } else if (playerBomb.phase === 'armed' && playerBomb.t >= 2) {
+      explodeAt(playerBomb.x, playerBomb.y, EXPLODE_R * 1.55, 22);
+      playerBomb.alive = false;
+      playerBomb = null;
+      return;
+    }
+    if (playerBomb && playerBomb.y - playerBomb.r > H + 40) {
+      playerBomb.alive = false;
+      playerBomb = null;
+    }
+  }
+
+  function drawPlayerBomb() {
+    if (!playerBomb || !playerBomb.alive) return;
+    const b = playerBomb;
+    const img = b.phase === 'armed'
+      ? (bombPlayerArmedImg || bombPlayerImg || bombArmedImg)
+      : (bombPlayerImg || bombImg);
+    const size = b.r * (b.phase === 'armed' ? 3.4 : 3.0);
+    if (img) {
+      ctx.save();
+      if (b.phase === 'armed') {
+        ctx.shadowColor = 'rgba(255,80,20,0.95)';
+        ctx.shadowBlur = 22;
+      }
+      ctx.drawImage(img, b.x - size / 2, b.y - size / 2, size, size);
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r * 1.2, 0, Math.PI * 2);
+      ctx.fillStyle = b.phase === 'armed' ? '#ff4d00' : '#222';
+      ctx.fill();
+    }
+  }
+
   function drawBombs() {
     for (const b of bombs) {
       if (!b.alive) continue;
@@ -1203,9 +1480,10 @@
         ctx.fill();
       }
     }
+    drawPlayerBomb();
   }
   function drawMechShadow() {
-    // Sombra elíptica bajo los pies; se mueve con structureDX (dodge)
+    // Sombra elíptica bajo los pies; se mueve con structureDX (y se suaviza si vuela)
     let minX = Infinity, maxX = -Infinity, n = 0;
     for (const br of bricks) {
       if (!br.alive || br.falling || br.settled) continue;
@@ -1215,15 +1493,19 @@
     }
     if (!n) return;
     const cx = (minX + maxX) / 2 + structureDX;
-    const rw = Math.max(28, (maxX - minX) * 0.42);
-    const rh = Math.max(8, brickPx * 2.2);
-    const sy = groundY + rh * 0.15;
+    const flying = !!level().fly;
+    const lift = flying ? Math.max(0, -structureDY) : 0;
+    const soft = flying ? Math.max(0.28, 1 - lift / 180) : 1;
+    const rw = Math.max(28, (maxX - minX) * 0.42) * (flying ? 0.85 : 1);
+    const rh = Math.max(8, brickPx * 2.2) * (flying ? 0.75 : 1);
+    const sy = groundY + rh * 0.15 + (flying ? Math.min(24, lift * 0.08) : 0);
     ctx.save();
+    ctx.globalAlpha = soft;
     ctx.translate(cx, sy);
     ctx.scale(1, rh / rw);
     const g = ctx.createRadialGradient(0, 0, rw * 0.15, 0, 0, rw);
-    g.addColorStop(0, 'rgba(0,0,0,0.45)');
-    g.addColorStop(0.55, 'rgba(0,0,0,0.22)');
+    g.addColorStop(0, flying ? 'rgba(0,0,0,0.28)' : 'rgba(0,0,0,0.45)');
+    g.addColorStop(0.55, flying ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.22)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
@@ -1336,9 +1618,9 @@
     drawGround();
     drawMechShadow();
     if (brickLayer) {
-      if (structureDX) {
+      if (structureDX || structureDY) {
         ctx.save();
-        ctx.translate(structureDX, 0);
+        ctx.translate(structureDX, structureDY);
         ctx.drawImage(brickLayer, 0, 0, W, H);
         ctx.restore();
       } else {
@@ -1434,6 +1716,8 @@
     return Promise.all([
       load('bomb.png', (i) => { bombImg = i; }),
       load('bomb-armed.png', (i) => { bombArmedImg = i; }),
+      load('bomb-player.png', (i) => { bombPlayerImg = i; }),
+      load('bomb-player-armed.png', (i) => { bombPlayerArmedImg = i; }),
     ]);
   }
 
@@ -1575,16 +1859,12 @@
       hint.classList.add('show');
       hint.innerHTML = '<strong>📏 Paleta grande</strong><span>20 segundos</span>';
     } else if (id === 'bomb') {
-      // explosión en el centro de la estructura viva
-      let sx = 0, sy = 0, n = 0;
-      for (const br of bricks) {
-        if (!br.alive || br.falling || br.settled) continue;
-        sx += br.x + br.w / 2; sy += br.y + br.h / 2; n++;
-      }
-      if (n) explodeAt(sx / n, sy / n);
-      else explodeAt(W / 2, H * 0.35);
+      playerBombArmed = true;
+      setBombButton(true);
+      closeAllMenus();
+      setPauseBtn(false);
       hint.classList.add('show');
-      hint.innerHTML = '<strong>💣 Bomba</strong><span>¡Boom!</span>';
+      hint.innerHTML = '<strong>💣 Bomba lista</strong><span>Bomba lista · toca el botón arriba</span>';
     } else if (id === 'laser') {
       fireLaser();
       hint.classList.add('show');
@@ -1659,6 +1939,34 @@
     e.stopPropagation(); openPause(); setPackBtn(false);
   });
 
+
+  const btnBomb = document.getElementById('btnBomb');
+  if (btnBomb) {
+    btnBomb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!playerBombArmed || playerBomb || !ball || gameOver || won || outro) return;
+      if (!launched) return;
+      const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
+      const ang = Math.atan2(ball.vy, ball.vx);
+      const speed = sp * 0.7;
+      playerBomb = {
+        x: ball.x,
+        y: ball.y,
+        vx: Math.cos(ang) * speed,
+        vy: Math.sin(ang) * speed,
+        r: Math.max(ball.r * 1.15, 8),
+        phase: 'fuse',
+        t: 0,
+        alive: true,
+      };
+      playerBombArmed = false;
+      setBombButton(false);
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>💣 Bomba en camino</strong><span>Espoleta 3s · armada 2s</span>';
+      setTimeout(() => { if (!paused && launched) hint.classList.remove('show'); }, 1400);
+    });
+  }
 
   (async function init() {
     try {
