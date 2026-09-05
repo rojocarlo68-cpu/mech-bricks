@@ -123,7 +123,13 @@
   let l6Wave = 1;
   let l6PendingSpawn = null;
   let l6Transit = false;
-  let l6CamFX = null; // { t, dur, swapped }
+  let l6CamFX = null; // { t, dur, swapped } head-turn FX
+  // Player damage visual FX
+  let hurtFlash = 0; // red flash timer (seconds)
+  let cracks = []; // precomputed crack polylines { pts, w, shard? }
+  let crackIntensity = 0; // 0..1 from lives vs START_LIVES
+  let deathGlitch = 0; // TV glitch timer on game over
+  let gameOverHintPending = false;
   let bgImgB = null;
   let structures = []; // multi-mech: each is a captured structure snapshot
   // L6 rook trio phase (after pawn waves)
@@ -898,6 +904,10 @@
     return S;
   }
 
+  function l6EaseInOut(u) {
+    return u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+  }
+
   async function l6PhaseTransition() {
     if (l6Transit) return;
     l6Transit = true;
@@ -907,10 +917,11 @@
     if (ball) { ball.vx = 0; ball.vy = 0; }
     launched = false;
     outro = null;
-    bumpCam(6);
-    l6CamFX = { t: 0, dur: 0.9, swapped: false };
+    bumpCam(5);
+    // Head-turn right: longer, smoother yaw (~1.4s) — not a flip
+    l6CamFX = { t: 0, dur: 1.4, swapped: false };
     hint.classList.add('show');
-    hint.innerHTML = '<strong>¿Qué…?</strong><span>La cámara gira…</span>';
+    hint.innerHTML = '<strong>¿Qué…?</strong><span>Volteas la mirada…</span>';
     try {
       if (!bgImgB && level().bgB) bgImgB = await loadBgSrc(level().bgB);
     } catch (e) {
@@ -922,7 +933,9 @@
     if (!l6Transit || !l6CamFX) return;
     l6CamFX.t += dt;
     const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
-    if (u >= 0.42 && !l6CamFX.swapped) {
+    const e = l6EaseInOut(u);
+    // Swap bg once the ruined corridor has mostly wiped in from the right
+    if (e >= 0.55 && !l6CamFX.swapped) {
       l6CamFX.swapped = true;
       if (bgImgB) bgImg = bgImgB;
       if (level().bgB) level().bg = level().bgB;
@@ -1515,6 +1528,7 @@
     l6Wave = 1;
     l6Transit = false;
     l6CamFX = null;
+    resetDamageFX();
     structures = [];
     l6RookStarted = false;
     l6RooksSpawned = 0;
@@ -1780,6 +1794,190 @@
     ball.vy = Math.sin(angle) * ball.speed;
   }
 
+  function resetDamageFX() {
+    hurtFlash = 0;
+    cracks = [];
+    crackIntensity = 0;
+    deathGlitch = 0;
+    gameOverHintPending = false;
+  }
+
+  function syncCrackIntensity() {
+    crackIntensity = Math.max(0, Math.min(1, 1 - lives / START_LIVES));
+  }
+
+  function addCrackBurst(impactX, impactY, count) {
+    const cx = impactX != null ? impactX : Math.random() * W;
+    const cy = impactY != null ? impactY : H * (0.45 + Math.random() * 0.4);
+    for (let i = 0; i < count; i++) {
+      let angle = Math.random() * Math.PI * 2;
+      const pts = [{ x: cx, y: cy }];
+      let x = cx, y = cy;
+      const segs = 4 + Math.floor(Math.random() * 5);
+      for (let s = 0; s < segs; s++) {
+        const len = 18 + Math.random() * (35 + crackIntensity * 40);
+        angle += (Math.random() - 0.5) * 0.95;
+        x += Math.cos(angle) * len;
+        y += Math.sin(angle) * len;
+        pts.push({ x, y });
+        if (Math.random() < 0.38) {
+          const ba = angle + (Math.random() < 0.5 ? -1 : 1) * (0.45 + Math.random() * 0.85);
+          let bx = x, by = y;
+          const bpts = [{ x, y }];
+          const bn = 2 + Math.floor(Math.random() * 3);
+          for (let b = 0; b < bn; b++) {
+            const bl = 10 + Math.random() * 28;
+            bx += Math.cos(ba) * bl;
+            by += Math.sin(ba) * bl;
+            bpts.push({ x: bx, y: by });
+          }
+          cracks.push({ pts: bpts, w: 0.7 + Math.random() * 1.1 });
+        }
+      }
+      cracks.push({ pts, w: 1 + Math.random() * 2.1 });
+    }
+    if (cracks.length > 90) cracks.splice(0, cracks.length - 90);
+  }
+
+  function triggerHurtFX(fullHeart) {
+    syncCrackIntensity();
+    hurtFlash = fullHeart ? 0.32 : 0.22;
+    bumpCam(fullHeart ? 3.2 : 2.4);
+    const n = Math.max(2, Math.floor(2 + crackIntensity * 7 + (fullHeart ? 3 : 0)));
+    const ix = paddle
+      ? paddle.x + paddle.w / 2 + (Math.random() - 0.5) * W * 0.35
+      : W * (0.25 + Math.random() * 0.5);
+    const iy = paddle
+      ? paddle.y - 30 - Math.random() * 90
+      : H * (0.55 + Math.random() * 0.3);
+    addCrackBurst(ix, iy, n);
+  }
+
+  function triggerDeathFX() {
+    if (deathGlitch > 0 || gameOverHintPending) return; // once
+    syncCrackIntensity();
+    crackIntensity = 1;
+    hurtFlash = 0.35;
+    bumpCam(8);
+    for (let i = 0; i < 14; i++) {
+      addCrackBurst(Math.random() * W, Math.random() * H, 2 + (i % 3));
+    }
+    for (const c of cracks) {
+      c.shard = {
+        dx: (Math.random() - 0.5) * 8,
+        dy: (Math.random() - 0.5) * 10,
+        rot: (Math.random() - 0.5) * 0.06,
+      };
+    }
+    deathGlitch = 1.15;
+    gameOverHintPending = true;
+  }
+
+  function updateDamageFX(dt) {
+    if (hurtFlash > 0) hurtFlash = Math.max(0, hurtFlash - dt);
+    if (deathGlitch > 0) {
+      deathGlitch = Math.max(0, deathGlitch - dt);
+      if (deathGlitch <= 0 && gameOverHintPending) {
+        gameOverHintPending = false;
+        hint.classList.add('show');
+        hint.innerHTML = '<strong>Game over</strong><span>Pulsa Reiniciar</span>';
+      }
+    }
+  }
+
+  function drawDamageOverlays() {
+    // Glass cracks (screen-space, accumulate)
+    if (cracks.length) {
+      const shatter = deathGlitch > 0 || (gameOver && lives <= 0);
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const c of cracks) {
+        if (!c.pts || c.pts.length < 2) continue;
+        ctx.save();
+        if (c.shard && shatter) {
+          ctx.translate(c.shard.dx * (1.2 + (1 - Math.min(1, deathGlitch / 1.15)) * 1.5), c.shard.dy * 1.4);
+          ctx.rotate(c.shard.rot);
+        }
+        ctx.beginPath();
+        ctx.moveTo(c.pts[0].x, c.pts[0].y);
+        for (let i = 1; i < c.pts.length; i++) ctx.lineTo(c.pts[i].x, c.pts[i].y);
+        ctx.lineWidth = (c.w || 1.2) + (shatter ? 0.6 : 0);
+        ctx.strokeStyle = shatter ? 'rgba(210,225,245,0.78)' : 'rgba(185,205,230,0.48)';
+        ctx.stroke();
+        ctx.lineWidth = Math.max(0.4, (c.w || 1) * 0.35);
+        ctx.strokeStyle = 'rgba(8,10,18,0.4)';
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // Transparent red hurt flash
+    if (hurtFlash > 0) {
+      const a = Math.min(0.42, hurtFlash * 1.35);
+      ctx.fillStyle = `rgba(200, 12, 18, ${a})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // TV no-signal / glitch on death
+    if (deathGlitch > 0) {
+      const u = 1 - Math.min(1, deathGlitch / 1.15); // 0→1 through glitch
+      const peak = u < 0.55 ? (u / 0.55) : (1 - (u - 0.55) / 0.45);
+      const inten = Math.max(0.15, peak);
+
+      // RGB channel shift stripes
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.fillStyle = `rgba(255,40,40,${0.12 * inten})`;
+      ctx.fillRect(-6 - inten * 10, 0, W, H);
+      ctx.fillStyle = `rgba(40,255,220,${0.10 * inten})`;
+      ctx.fillRect(6 + inten * 10, 0, W, H);
+      ctx.fillStyle = `rgba(60,80,255,${0.08 * inten})`;
+      ctx.fillRect(0, -3, W, H);
+      ctx.restore();
+
+      // Horizontal tear lines
+      const tears = 6 + Math.floor(inten * 10);
+      for (let i = 0; i < tears; i++) {
+        const y = ((Math.sin(deathGlitch * 40 + i * 1.7) * 0.5 + 0.5) * H * 0.92) | 0;
+        const h = 1 + ((i + deathGlitch * 20) % 4);
+        const shift = Math.sin(deathGlitch * 55 + i) * (18 + inten * 40);
+        ctx.fillStyle = `rgba(255,255,255,${0.08 + inten * 0.18})`;
+        ctx.fillRect(shift, y, W, h);
+        ctx.fillStyle = `rgba(0,0,0,${0.15 * inten})`;
+        ctx.fillRect(-shift * 0.5, y + h, W, 1);
+      }
+
+      // Static noise speckles
+      const n = Math.floor(80 + inten * 220);
+      for (let i = 0; i < n; i++) {
+        const x = Math.random() * W;
+        const y = Math.random() * H;
+        const g = Math.random();
+        ctx.fillStyle = `rgba(${(g*255)|0},${(g*255)|0},${(g*255)|0},${0.15 + inten * 0.35})`;
+        ctx.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
+      }
+
+      // Color bars flicker (brief)
+      if (inten > 0.55 && Math.sin(deathGlitch * 28) > 0.2) {
+        const cols = ['#fff', '#ff0', '#0ff', '#0f0', '#f0f', '#f00', '#00f', '#000'];
+        const bw = W / cols.length;
+        ctx.save();
+        ctx.globalAlpha = 0.18 * inten;
+        for (let i = 0; i < cols.length; i++) {
+          ctx.fillStyle = cols[i];
+          ctx.fillRect(i * bw, H * 0.35, bw + 1, H * 0.3);
+        }
+        ctx.restore();
+      }
+
+      // Dark vignette pulse
+      ctx.fillStyle = `rgba(0,0,0,${0.12 * inten})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
   function checkGameOver() {
     if (lives > 0.001) return false;
     lives = 0;
@@ -1787,8 +1985,7 @@
     launched = false;
     bombs = [];
     clearLaserCannons();
-    hint.classList.add('show');
-    hint.innerHTML = '<strong>Game over</strong><span>Pulsa Reiniciar</span>';
+    triggerDeathFX();
     updateHud();
     return true;
   }
@@ -1802,7 +1999,7 @@
       return;
     }
     lives = Math.max(0, lives - 1);
-    bumpCam(3.2);
+    triggerHurtFX(true);
     updateHud();
     if (checkGameOver()) return;
     launched = false;
@@ -1817,6 +2014,7 @@
       return;
     }
     lives = Math.max(0, +(lives - 0.25).toFixed(2));
+    triggerHurtFX(false);
     updateHud();
     checkGameOver();
   }
@@ -3167,15 +3365,30 @@
     // Un pelín más arriba para que los pies “pisen” el pavimento
     const dy = groundY - groundFrac * dh + brickPx * 0.5;
     ctx.drawImage(bgImg, dx, dy, dw, dh);
-    // L6 transit: crossfade ruined corridor
+    // L6 head-turn: ruined corridor wipes in from the right (looking right)
     if (l6CamFX && bgImgB && !l6CamFX.swapped) {
       const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
-      const fade = Math.max(0, (u - 0.25) / 0.35);
-      if (fade > 0) {
+      const e = l6EaseInOut(u);
+      const wipe = Math.max(0, Math.min(1, (e - 0.18) / 0.52));
+      if (wipe > 0) {
         ctx.save();
-        ctx.globalAlpha = Math.min(1, fade);
-        ctx.drawImage(bgImgB, dx, dy, dw, dh);
+        const wipeX = W * (1 - wipe);
+        ctx.beginPath();
+        ctx.rect(wipeX - 2, -4, W - wipeX + 8, H + 8);
+        ctx.clip();
+        const slideIn = (1 - wipe) * W * 0.22;
+        ctx.globalAlpha = Math.min(1, 0.35 + wipe * 0.65);
+        ctx.drawImage(bgImgB, dx + slideIn, dy, dw, dh);
         ctx.restore();
+        // Soft edge of the wipe
+        if (wipe < 0.98) {
+          const grd = ctx.createLinearGradient(wipeX - 40, 0, wipeX + 30, 0);
+          grd.addColorStop(0, 'rgba(10,6,4,0)');
+          grd.addColorStop(0.55, 'rgba(10,6,4,0.35)');
+          grd.addColorStop(1, 'rgba(20,10,6,0.15)');
+          ctx.fillStyle = grd;
+          ctx.fillRect(wipeX - 40, 0, 70, H);
+        }
       }
     }
 
@@ -3255,19 +3468,28 @@
     let ox = Math.sin(t * 17.3) * amp * 0.35 + Math.sin(t * 41.1) * amp * 0.18;
     let oy = Math.cos(t * 19.7) * amp * 0.28 + Math.sin(t * 33.5) * amp * 0.16;
     let rot = (Math.sin(t * 13.1) * amp) * 0.00055;
+    let sx = 1, sy = 1;
 
-    // L6 phone-camera whip pan
+    // L6: head turn right — pan/yaw (no flip). Looking right → world slides left;
+    // new view enters from the right. Soft FOV stretch then settle.
     if (l6CamFX) {
       const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
-      const swing = Math.sin(u * Math.PI) * (26 * Math.PI / 180);
-      const slide = Math.sin(u * Math.PI) * (u < 0.5 ? 90 : -70);
-      ox += slide;
-      oy += Math.sin(u * Math.PI * 2) * 28;
-      rot += swing * (u < 0.55 ? 1 : -0.55);
+      const e = l6EaseInOut(u);
+      const peak = Math.sin(u * Math.PI); // 0 at ends, 1 mid-turn
+      // Continuous pan left (no reverse whip)
+      ox -= e * W * 0.42;
+      oy += peak * 6 * Math.sin(u * Math.PI * 1.5);
+      // Subtle roll only — not a pirate flip
+      rot += peak * 0.035;
+      // Fake rotateY / FOV: compress X at peak, slight zoom stretch then settle
+      const fov = 1 + peak * 0.1 - e * 0.03;
+      sx = (1 - peak * 0.14) * fov;
+      sy = fov;
     }
 
     ctx.save();
     ctx.translate(W / 2 + ox, H / 2 + oy);
+    ctx.scale(sx, sy);
     ctx.rotate(rot);
     ctx.translate(-W / 2, -H / 2);
 
@@ -3288,23 +3510,48 @@
     drawBallAirTrail();
     drawBall();
 
-    // Motion-blur / flash feel during whip
+    // Motion blur / smear streaks during peak head-turn
     if (l6CamFX) {
       const u = Math.min(1, l6CamFX.t / l6CamFX.dur);
-      const flash = Math.sin(u * Math.PI);
-      ctx.fillStyle = `rgba(20,8,0,${0.18 * flash})`;
-      ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = `rgba(255,160,60,${0.08 * flash})`;
-      ctx.fillRect(0, 0, W, H);
+      const peak = Math.sin(u * Math.PI);
+      if (peak > 0.15) {
+        ctx.save();
+        ctx.fillStyle = `rgba(12,5,0,${0.14 * peak})`;
+        ctx.fillRect(0, 0, W, H);
+        const streaks = Math.floor(8 + peak * 14);
+        for (let i = 0; i < streaks; i++) {
+          const y = ((i * 97 + u * 800) % H);
+          const h = 1 + (i % 3);
+          const len = 50 + peak * 140 + (i % 5) * 18;
+          const x = ((i * 53 + eSeed(u, i)) % (W + len)) - len * 0.3;
+          ctx.fillStyle = `rgba(255,190,120,${0.06 + peak * 0.14})`;
+          ctx.fillRect(x, y, len, h);
+          ctx.fillStyle = `rgba(40,20,10,${0.05 + peak * 0.08})`;
+          ctx.fillRect(x - 20, y + h, len * 0.7, 1);
+        }
+        ctx.fillStyle = `rgba(255,150,60,${0.06 * peak})`;
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+      }
     }
     ctx.restore();
+
+    // Screen-space damage overlays (flash / cracks / death glitch)
+    drawDamageOverlays();
+  }
+
+  function eSeed(u, i) {
+    return ((Math.sin(u * 40 + i * 1.3) * 0.5 + 0.5) * W);
   }
 
   function frame(ts) {
     const dt = Math.min(0.033, (ts - lastTs) / 1000 || 0.016);
     lastTs = ts;
     update(dt);
-    if (!paused) camShake = Math.max(0, camShake - dt * 6.5);
+    if (!paused) {
+      camShake = Math.max(0, camShake - dt * 6.5);
+      updateDamageFX(dt);
+    }
     draw();
     requestAnimationFrame(frame);
   }
