@@ -16,10 +16,12 @@
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false, irregularBricks: true },
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
-    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.94, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true },
+    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
+    { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', paddleScale: 0.9027, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.02, brickDamageMult: 1.2 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
+  function levelBallSpeedMult() { return level().ballSpeed || 1; }
   // ?level=2 para probar nivel 2 directo
   (function bootLevelFromUrl() {
     try {
@@ -92,6 +94,9 @@
   let structureDVY = 0;
   let structureAngle = 0; // rad — tilt/yaw for fly mechs
   let structureAV = 0;    // angular velocity
+  let jumpPhase = 'ground'; // ground | up | down
+  let jumpCooldown = 0;
+  let jumpTargetDX = 0;
   let playerBombArmed = false;
   let playerBomb = null;
   let fitScale = 1;
@@ -959,6 +964,9 @@
     structureDVY = 0;
     structureAngle = 0;
     structureAV = 0;
+    jumpPhase = 'ground';
+    jumpCooldown = 0;
+    jumpTargetDX = 0;
 
     bricks = [];
     groundY = 0;
@@ -1077,7 +1085,7 @@
     ball = {
       r,
       x: 0, y: 0, vx: 0, vy: 0,
-      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7,
+      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult(),
     };
     stickBallToPaddle();
 
@@ -1263,7 +1271,7 @@
     const hx = br.x + br.w / 2, hy = br.y + br.h / 2;
     spawnDust(hx, hy, br.color, br.hp <= 1 ? 14 : 8);
     spawnMetalSparks(hx, hy); // chispas metal-metal
-    br.hp -= ballDamage();
+    br.hp -= ballDamage() * (level().brickDamageMult || 1);
     score += 1; // $1 por golpe
     if (br.hp <= 0) {
       destroyBrick(br, 0);
@@ -1604,7 +1612,146 @@
     }
   }
 
+  function updateJumpAI(dt) {
+    const step = dt * 60;
+    jumpCooldown = Math.max(0, jumpCooldown - dt);
+
+    // Soft settle / idle when not in play
+    if (!launched || gameOver || won || outro) {
+      structureDVX *= 0.9;
+      structureAV *= 0.8;
+      structureAngle *= 0.9;
+      if (structureDY < -0.01 || jumpPhase !== 'ground') {
+        structureDVY += G * 0.9 * step;
+        structureDY += structureDVY * step;
+        structureDX += structureDVX * step;
+        if (structureDY >= 0) {
+          structureDY = 0;
+          structureDVY = 0;
+          structureDVX *= 0.35;
+          jumpPhase = 'ground';
+        }
+      } else {
+        structureDY = 0;
+        structureDVY *= 0.85;
+      }
+      // keep on screen
+      const left0 = originX + structureDX;
+      const right0 = originX + imgW * fitScale + structureDX;
+      if (left0 < 6) { structureDX += 6 - left0; structureDVX = Math.abs(structureDVX) * 0.35; }
+      if (right0 > W - 6) { structureDX -= right0 - (W - 6); structureDVX = -Math.abs(structureDVX) * 0.35; }
+      applyStructureOffset();
+      return;
+    }
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, n = 0;
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      minX = Math.min(minX, br.x); maxX = Math.max(maxX, br.x + br.w);
+      minY = Math.min(minY, br.y); maxY = Math.max(maxY, br.y + br.h);
+      n++;
+    }
+    if (!n) { applyStructureOffset(); return; }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const halfW = (maxX - minX) / 2;
+
+    // Predict impact (grounded: ball rising toward mech)
+    let threat = 0;
+    let predX = ball.x;
+    const approaching = ball.vy < -0.05 && ball.y > minY;
+    if (approaching) {
+      const frames = (ball.y - cy) / Math.max(0.05, -ball.vy);
+      if (frames > 0 && frames < 100) {
+        let px = ball.x, py = ball.y, pvx = ball.vx, pvy = ball.vy;
+        const steps = Math.min(70, frames | 0);
+        for (let f = 0; f < steps; f++) {
+          px += pvx; py += pvy;
+          if (px < ball.r) { px = ball.r; pvx = Math.abs(pvx); }
+          if (px > W - ball.r) { px = W - ball.r; pvx = -Math.abs(pvx); }
+        }
+        predX = px;
+        const dist = Math.abs(predX - cx);
+        const reach = halfW + ball.r + 40;
+        if (dist < reach) threat = 1.0 - dist / (reach + 80);
+      }
+    } else if (Math.hypot(ball.x - cx, ball.y - cy) < halfW + 80 && ball.y < maxY + 40) {
+      predX = ball.x;
+      threat = 0.55;
+    }
+
+    const onGround = jumpPhase === 'ground' && structureDY >= -0.5;
+
+    if (onGround && jumpCooldown <= 0 && threat > 0.08) {
+      let dir = predX < cx ? 1 : -1;
+      const roomL = cx - halfW - 8;
+      const roomR = W - 8 - (cx + halfW);
+      if (Math.abs(predX - cx) < 12) dir = roomR > roomL ? 1 : -1;
+      // Prefer the side with more room if chosen side is tight
+      if (dir < 0 && roomL < 50 && roomR > roomL) dir = 1;
+      if (dir > 0 && roomR < 50 && roomL > roomR) dir = -1;
+
+      const hopDist = 80 + Math.random() * 60; // 80–140px
+      jumpTargetDX = structureDX + dir * hopDist;
+      // Clamp target so feet stay on-screen
+      const mechW = imgW * fitScale;
+      const maxDX = W - 6 - mechW - originX;
+      const minDX = 6 - originX;
+      jumpTargetDX = Math.max(minDX, Math.min(maxDX, jumpTargetDX));
+
+      const heightPx = 42 + Math.random() * 28; // ~40–70
+      // v0 ≈ -sqrt(2 * G * h) in per-frame units
+      structureDVY = -Math.sqrt(Math.max(8, 2 * G * heightPx));
+      structureDVX = (jumpTargetDX - structureDX) / 18; // drift toward hop X while airborne
+      structureDVX = Math.max(-4.2, Math.min(4.2, structureDVX));
+      jumpPhase = 'up';
+      jumpCooldown = 0.9 + Math.random() * 0.5; // 0.9–1.4s
+    }
+
+    if (jumpPhase !== 'ground' || structureDY < -0.01) {
+      structureDVY += G * 0.92 * step;
+      structureDY += structureDVY * step;
+      structureDX += structureDVX * step;
+      // Nudge toward hop target while airborne
+      if (jumpPhase !== 'ground') {
+        const err = jumpTargetDX - structureDX;
+        structureDVX += Math.max(-0.35, Math.min(0.35, err * 0.04)) * step;
+        structureDVX *= 0.992;
+      }
+      if (structureDVY > 0 && jumpPhase === 'up') jumpPhase = 'down';
+      if (structureDY >= 0) {
+        structureDY = 0;
+        structureDVY = 0;
+        structureDVX *= 0.28;
+        jumpPhase = 'ground';
+      }
+    } else {
+      // Ground idle: gentle return toward center DX
+      structureDY = 0;
+      structureDVY = 0;
+      structureDVX *= 0.9;
+      if (Math.abs(structureDX) > 10) {
+        structureDVX += (structureDX > 0 ? -0.22 : 0.22) * step * 0.35;
+      }
+      structureDX += structureDVX * step;
+    }
+
+    structureAV *= 0.8;
+    structureAngle *= 0.9;
+
+    const left = originX + structureDX;
+    const right = originX + imgW * fitScale + structureDX;
+    if (left < 6) { structureDX += 6 - left; structureDVX = Math.abs(structureDVX) * 0.4; }
+    if (right > W - 6) { structureDX -= right - (W - 6); structureDVX = -Math.abs(structureDVX) * 0.4; }
+
+    applyStructureOffset();
+  }
+
   function updateDodgeAI(dt) {
+    if (level().jump) {
+      updateJumpAI(dt);
+      return;
+    }
     const canMove = level().dodge || level().fly;
     if (!canMove || !launched || gameOver || won || outro) {
       structureDVX *= 0.9;
@@ -2174,18 +2321,19 @@
     if (!n) return;
     const cx = (minX + maxX) / 2 + structureDX;
     const flying = !!level().fly;
-    const lift = flying ? Math.max(0, -structureDY) : 0;
-    const soft = flying ? Math.max(0.28, 1 - lift / 180) : 1;
-    const rw = Math.max(28, (maxX - minX) * 0.42) * (flying ? 0.85 : 1);
-    const rh = Math.max(8, brickPx * 2.2) * (flying ? 0.75 : 1);
-    const sy = groundY + rh * 0.15 + (flying ? Math.min(24, lift * 0.08) : 0);
+    const jumping = !!level().jump;
+    const lift = (flying || jumping) ? Math.max(0, -structureDY) : 0;
+    const soft = (flying || jumping) ? Math.max(0.28, 1 - lift / 180) : 1;
+    const rw = Math.max(28, (maxX - minX) * 0.42) * (flying ? 0.85 : jumping && lift > 2 ? 0.9 : 1);
+    const rh = Math.max(8, brickPx * 2.2) * (flying ? 0.75 : jumping && lift > 2 ? 0.85 : 1);
+    const sy = groundY + rh * 0.15 + ((flying || jumping) ? Math.min(24, lift * 0.08) : 0);
     ctx.save();
     ctx.globalAlpha = soft;
     ctx.translate(cx, sy);
     ctx.scale(1, rh / rw);
     const g = ctx.createRadialGradient(0, 0, rw * 0.15, 0, 0, rw);
-    g.addColorStop(0, flying ? 'rgba(0,0,0,0.28)' : 'rgba(0,0,0,0.45)');
-    g.addColorStop(0.55, flying ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.22)');
+    g.addColorStop(0, flying ? 'rgba(0,0,0,0.28)' : jumping && lift > 8 ? 'rgba(0,0,0,0.32)' : 'rgba(0,0,0,0.45)');
+    g.addColorStop(0.55, flying ? 'rgba(0,0,0,0.12)' : jumping && lift > 8 ? 'rgba(0,0,0,0.14)' : 'rgba(0,0,0,0.22)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
