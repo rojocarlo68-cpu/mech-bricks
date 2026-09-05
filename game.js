@@ -971,15 +971,16 @@
       return;
     }
     const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
-    // Más grande; el suelo de la plaza (~78% de la imagen) cae en groundY (pies del mech)
-    const groundFrac = 0.86;
-    const needH = Math.max(H * 1.25, (groundY + H * 0.35) / groundFrac);
-    const scale = Math.max(W / iw, needH / ih) * 1.12;
+    // Plaza/pavimento abajo (~92%): alineado con pies del mech (groundY)
+    const groundFrac = 0.93;
+    const needH = Math.max(H * 1.35, (groundY + H * 0.45) / groundFrac);
+    const scale = Math.max(W / iw, needH / ih) * 1.18;
     const dw = iw * scale, dh = ih * scale;
-    // Solo pan horizontal suave; vertical fijo al suelo
+    // Solo pan horizontal suave; vertical fijo al suelo bajo los pies
     const drift = Math.sin(bgT * 0.045) * Math.min(28, (dw - W) * 0.08);
     const dx = -(dw - W) * 0.5 + drift;
-    const dy = groundY - groundFrac * dh;
+    // Un pelín más arriba para que los pies “pisen” el pavimento
+    const dy = groundY - groundFrac * dh + brickPx * 0.5;
     ctx.drawImage(bgImg, dx, dy, dw, dh);
 
     // Capas suaves de “calor” sin mover el suelo
