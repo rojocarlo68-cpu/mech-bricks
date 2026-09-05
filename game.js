@@ -16,7 +16,7 @@
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false, irregularBricks: true },
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
-    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level4.jpg', paddleScale: 0.94, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.85, irregularBricks: true },
+    { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.94, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.85, irregularBricks: true },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -35,7 +35,8 @@
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
     { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 1090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
-    { id: 'ballskin', name: 'Bola grabada', desc: 'Skin de bola · dureza +10%', icon: '🪩', price: 26799, minLevel: 3, img: 'ball-skin.png' },
+    { id: 'ballskin', name: 'Bola grabada', desc: 'Skin de bola · dureza +10%', icon: '🪩', price: 26799, minLevel: 3, img: 'ball-skin.png', ballPower: 1.1 },
+    { id: 'ballsilbadora', name: 'La silbadora', desc: 'Skin · dureza +20% · rastro de aire', icon: '💨', price: 35699, minLevel: 5, img: 'ball-silbadora.png', ballPower: 1.2 },
   ];
   const PACK_MAX = 5;
   const MAX_BRICKS = 12000;
@@ -92,9 +93,19 @@
   let playerBombArmed = false;
   let playerBomb = null;
   let fitScale = 1;
-  let ballSkinImg = null;
-  let ballSkinOn = false;
+  let activeBallSkin = null; // null | 'ballskin' | 'ballsilbadora'
+  let ballSkinImgs = { ballskin: null, ballsilbadora: null };
+  let ballAirTrail = [];
   let baseBallR = 6;
+  function ballSkinOn() { return activeBallSkin != null; }
+  function ballRadiusMult() {
+    if (activeBallSkin === 'ballsilbadora') return 1.12;
+    if (activeBallSkin === 'ballskin') return 1.1;
+    return 1;
+  }
+  function activeBallSkinImg() {
+    return activeBallSkin ? ballSkinImgs[activeBallSkin] : null;
+  }
   let bombTimer = 0;
   let structureCount = 0; // ladrillos/paneles aún en la estructura (no caídos)
   let structureStartCount = 0;
@@ -127,7 +138,9 @@
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {
         const i = (y * imgW + x) * 4;
-        if (imgData[i + 3] < 28) continue;
+        const a = imgData[i + 3];
+        if (a < 28) continue; // ignore near-transparent
+        // alpha >= 28 → solid: RGB at full weight (no blend toward transparent)
         r += imgData[i]; g += imgData[i + 1]; b += imgData[i + 2]; n++;
       }
     }
@@ -188,6 +201,7 @@
     lctx.clearRect(lx - 1.2, ly - 1.2, br.w + 2.4, br.h + 2.4);
     if (!br.alive || br.falling || br.settled) return;
     const t = br.hp / br.maxHp;
+    // fully opaque rgb() — never rgba with alpha < 1
     lctx.fillStyle = shade(br.color, 0.62 + 0.38 * t);
     if (br.panel && br.poly && br.poly.length >= 3) {
       lctx.beginPath();
@@ -1048,9 +1062,10 @@
     paddleTrail = [];
     bigPaddleUntil = 0;
 
+    ballAirTrail = [];
     const diameter = Math.max(brickPx * 3.92, 12);
     baseBallR = diameter / 2;
-    const r = ballSkinOn ? baseBallR * 1.1 : baseBallR;
+    const r = baseBallR * ballRadiusMult();
     ball = {
       r,
       x: 0, y: 0, vx: 0, vy: 0,
@@ -1229,7 +1244,9 @@
   }
 
   function ballDamage() {
-    return ballSkinOn ? 1.1 : 1; // +10% dureza
+    if (!activeBallSkin) return 1;
+    const it = SHOP.find((s) => s.id === activeBallSkin);
+    return (it && it.ballPower) || 1;
   }
 
   function hitBrick(br) {
@@ -1749,9 +1766,13 @@
 
     if (!launched) {
       stickBallToPaddle();
+      updateBallAirTrail(dt);
       return;
     }
-    if (gameOver || won) return;
+    if (gameOver || won) {
+      updateBallAirTrail(dt);
+      return;
+    }
 
     bombTimer -= dt;
     if (bombTimer <= 0) {
@@ -1793,6 +1814,7 @@
         return;
       }
     }
+    updateBallAirTrail(dt);
   }
 
   function drawGround() {
@@ -1870,13 +1892,55 @@
     }
   }
 
+  function updateBallAirTrail(dt) {
+    for (let i = ballAirTrail.length - 1; i >= 0; i--) {
+      const p = ballAirTrail[i];
+      p.life -= dt;
+      if (p.life <= 0) { ballAirTrail.splice(i, 1); continue; }
+    }
+    if (
+      activeBallSkin === 'ballsilbadora' &&
+      launched &&
+      ball &&
+      (Math.abs(ball.vx) > 0.01 || Math.abs(ball.vy) > 0.01)
+    ) {
+      const maxLife = 0.28 + Math.random() * 0.12; // ~0.25–0.4s
+      ballAirTrail.push({
+        x: ball.x + (Math.random() - 0.5) * 2,
+        y: ball.y + (Math.random() - 0.5) * 2,
+        life: maxLife,
+        maxLife,
+        r: ball.r * (0.55 + Math.random() * 0.4),
+      });
+      if (ballAirTrail.length > 48) ballAirTrail.splice(0, ballAirTrail.length - 48);
+    }
+  }
+
+  function drawBallAirTrail() {
+    if (!ballAirTrail.length) return;
+    ctx.save();
+    for (const p of ballAirTrail) {
+      const a = Math.max(0, p.life / p.maxLife);
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.r * 1.55, p.r * 0.75, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(180, 235, 255, ${0.22 * a})`;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.r * 0.85, p.r * 0.4, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.28 * a})`;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function drawBall() {
-    if (ballSkinOn && ballSkinImg) {
+    const skinImg = activeBallSkinImg();
+    if (activeBallSkin && skinImg) {
       const s = ball.r * 2.15;
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.45)';
       ctx.shadowBlur = 8;
-      ctx.drawImage(ballSkinImg, ball.x - s / 2, ball.y - s / 2, s, s);
+      ctx.drawImage(skinImg, ball.x - s / 2, ball.y - s / 2, s, s);
       ctx.restore();
       return;
     }
@@ -2176,6 +2240,7 @@
     drawBombs();
     drawLaserBeams();
     drawPaddle();
+    drawBallAirTrail();
     drawBall();
     ctx.restore();
   }
@@ -2222,7 +2287,7 @@
       levelIndex = 0;
       score = 0;
       backpack = [];
-      ballSkinOn = false;
+      // KEEP activeBallSkin across full campaign restart
       loading.classList.remove('hide');
       loading.textContent = 'Cargando Nivel 1…';
       Promise.all([loadImage(), loadBg()]).then(() => { buildLevel(); loading.classList.add('hide'); });
@@ -2277,12 +2342,16 @@
   }
 
   function loadBallSkin() {
-    return new Promise((resolve) => {
+    const load = (key, src) => new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => { ballSkinImg = img; resolve(); };
-      img.onerror = () => { console.warn('ball-skin.png missing'); resolve(); };
-      img.src = 'ball-skin.png';
+      img.onload = () => { ballSkinImgs[key] = img; resolve(); };
+      img.onerror = () => { console.warn(src + ' missing'); resolve(); };
+      img.src = src;
     });
+    return Promise.all([
+      load('ballskin', 'ball-skin.png'),
+      load('ballsilbadora', 'ball-silbadora.png'),
+    ]);
   }
 
 
@@ -2338,8 +2407,8 @@
     const lvl = level().id;
     shopList.innerHTML = SHOP.filter((it) => {
       if (it.minLevel != null && lvl < it.minLevel) return false;
-      // bola: solo desde nivel 3; ocultar si ya equipada o en mochila
-      if (it.id === 'ballskin' && (ballSkinOn || backpack.includes('ballskin'))) return false;
+      // ball skins: hide if active or already in backpack
+      if (it.ballPower != null && (activeBallSkin === it.id || backpack.includes(it.id))) return false;
       return true;
     }).map((it) => {
       const full = backpack.length >= PACK_MAX;
@@ -2434,11 +2503,15 @@
       beginLaserWarmup();
       hint.classList.add('show');
       hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>Listos en 1s · ráfaga 1s · CD 7s</span>';
-    } else if (id === 'ballskin') {
-      ballSkinOn = true;
-      if (ball && baseBallR) ball.r = baseBallR * 1.1;
+    } else if (id === 'ballskin' || id === 'ballsilbadora') {
+      activeBallSkin = id;
+      if (ball && baseBallR) ball.r = baseBallR * ballRadiusMult();
       hint.classList.add('show');
-      hint.innerHTML = '<strong>🪩 Bola grabada</strong><span>Skin activa · dureza +10%</span>';
+      if (id === 'ballsilbadora') {
+        hint.innerHTML = '<strong>💨 La silbadora</strong><span>Skin activa · dureza +20% · rastro de aire</span>';
+      } else {
+        hint.innerHTML = '<strong>🪩 Bola grabada</strong><span>Skin activa · dureza +10%</span>';
+      }
     }
     updateHud();
     renderPack();
