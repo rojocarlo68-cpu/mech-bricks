@@ -49,7 +49,7 @@
       filter: drop-shadow(0 2px 4px rgba(0,0,0,.55));
     }
     .img-btn:active { transform: scale(.96); opacity: .95; }
-    #pauseOverlay .img-btn img, #shopOverlay .img-btn img { height: 72px; margin: 0 auto; }
+    #pauseOverlay .img-btn img, #shopOverlay .img-btn img, #packOverlay .img-btn img { height: 72px; margin: 0 auto; }
     .menu-btns .img-btn { width: auto; align-self: center; background: transparent !important; }
 
     #stage {
@@ -173,7 +173,9 @@
             <button type="button" class="img-btn" id="btnShop" aria-label="Tienda">
               <img id="btnShopImg" src="btn-shop.png" alt="Tienda" />
             </button>
-            <button type="button" class="secondary" id="btnPack">Mochila</button>
+            <button type="button" class="img-btn" id="btnPack" aria-label="Mochila">
+              <img id="btnPackImg" src="btn-pack.png" alt="Mochila" />
+            </button>
           </div>
         </div>
       </div>

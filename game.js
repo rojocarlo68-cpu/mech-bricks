@@ -12,8 +12,9 @@
 
   const MIN_BRICKS = 7000;
   const LEVELS = [
-    { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', bg: 'bg.jpg', paddleScale: 1.0, groundFrac: 0.93 },
-    { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80 },
+    { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', bg: 'bg.jpg', paddleScale: 1.0, groundFrac: 0.93, dodge: false },
+    { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false },
+    { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -27,11 +28,11 @@
   })();
 
   const SHOP = [
-    { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 80 },
-    { id: 'laser', name: 'Pistola láser', desc: 'Rayo vertical que parte ladrillos', icon: '🔫', price: 120 },
-    { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 100 },
-    { id: 'bomb', name: 'Bomba', desc: 'Explosión grande en el mech', icon: '💣', price: 90 },
-    { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 110 },
+    { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 1080 },
+    { id: 'laser', name: 'Pistola láser', desc: 'Rayo vertical que parte ladrillos', icon: '🔫', price: 1120 },
+    { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
+    { id: 'bomb', name: 'Bomba', desc: 'Explosión grande en el mech', icon: '💣', price: 1090 },
+    { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
   ];
   const PACK_MAX = 5;
   const MAX_BRICKS = 12000;
@@ -70,6 +71,9 @@
   let basePaddleW = 0;
   let minIy = 0, maxIy = 0;
   let camShake = 0; // cámara ansiosa / agitada
+  let structureDX = 0;
+  let structureDVX = 0;
+  let fitScale = 1;
   let bombTimer = 0;
   let structureCount = 0; // ladrillos aún en la estructura (no caídos)
   let outro = null; // null | 'slowmo' | 'done'
@@ -156,21 +160,21 @@
 
   function drawBrickToLayer(br) {
     const lctx = brickLayer.getContext('2d');
-    // Limpiar y pintar opaco a tope (sin huecos al fondo)
-    lctx.clearRect(br.x - 0.6, br.y - 0.6, br.w + 1.2, br.h + 1.2);
+    // La capa estática usa coords base (sin dodge)
+    const lx = br.baseX != null ? br.baseX : br.x;
+    const ly = br.baseY != null ? br.baseY : br.y;
+    lctx.clearRect(lx - 0.6, ly - 0.6, br.w + 1.2, br.h + 1.2);
     if (!br.alive || br.falling || br.settled) return;
     const t = br.hp / br.maxHp;
-    // Solape mínimo para que no se filtre el escenario entre ladrillos
     lctx.fillStyle = shade(br.color, 0.62 + 0.38 * t);
-    lctx.fillRect(br.x - 0.35, br.y - 0.35, br.w + 0.7, br.h + 0.7);
-    // Borde interno opaco para sellar
+    lctx.fillRect(lx - 0.35, ly - 0.35, br.w + 0.7, br.h + 0.7);
     lctx.strokeStyle = shade(br.color, 0.45);
     lctx.lineWidth = 0.8;
-    lctx.strokeRect(br.x - 0.1, br.y - 0.1, br.w + 0.2, br.h + 0.2);
+    lctx.strokeRect(lx - 0.1, ly - 0.1, br.w + 0.2, br.h + 0.2);
     if (br.maxHp >= 2) {
       lctx.strokeStyle = 'rgba(255,196,70,0.55)';
       lctx.lineWidth = 1;
-      lctx.strokeRect(br.x + 0.6, br.y + 0.6, br.w - 1.2, br.h - 1.2);
+      lctx.strokeRect(lx + 0.6, ly + 0.6, br.w - 1.2, br.h - 1.2);
     }
   }
 
@@ -394,10 +398,14 @@
         minIy = Math.min(minIy, iy);
         maxIy = Math.max(maxIy, iy);
         const maxHp = 1; // 1 golpe
+        const bx = originX + ix * cellScreen;
+        const by = originY + iy * cellScreen;
         const br = {
           ix, iy,
-          x: originX + ix * cellScreen,
-          y: originY + iy * cellScreen,
+          baseX: bx,
+          baseY: by,
+          x: bx,
+          y: by,
           w: brickPx,
           h: brickPx,
           color: `rgb(${c.r},${c.g},${c.b})`,
@@ -416,6 +424,9 @@
     }
     // Suelo justo bajo los pies
     groundY += 0.5;
+    structureDX = 0;
+    structureDVX = 0;
+    fitScale = fit;
 
     brickLayer = document.createElement('canvas');
     brickLayer.width = Math.floor(W * dpr);
@@ -666,9 +677,10 @@
   }
 
   function collideBricksWithBall() {
-    const ix0 = Math.floor((ball.x - ball.r - originX) / cellScreen) - 1;
+    const ox = originX + structureDX;
+    const ix0 = Math.floor((ball.x - ball.r - ox) / cellScreen) - 1;
     const iy0 = Math.floor((ball.y - ball.r - originY) / cellScreen) - 1;
-    const ix1 = Math.floor((ball.x + ball.r - originX) / cellScreen) + 1;
+    const ix1 = Math.floor((ball.x + ball.r - ox) / cellScreen) + 1;
     const iy1 = Math.floor((ball.y + ball.r - originY) / cellScreen) + 1;
 
     let hit = null;
@@ -738,9 +750,10 @@
       }
 
       if (b.reflected) {
-        const ix0 = Math.floor((b.x - b.r - originX) / cellScreen) - 1;
+        const ox = originX + structureDX;
+        const ix0 = Math.floor((b.x - b.r - ox) / cellScreen) - 1;
         const iy0 = Math.floor((b.y - b.r - originY) / cellScreen) - 1;
-        const ix1 = Math.floor((b.x + b.r - originX) / cellScreen) + 1;
+        const ix1 = Math.floor((b.x + b.r - ox) / cellScreen) + 1;
         const iy1 = Math.floor((b.y + b.r - originY) / cellScreen) + 1;
         let struck = false;
         for (let iy = iy0; iy <= iy1 && !struck; iy++) {
@@ -829,6 +842,89 @@
     }
   }
 
+
+  function applyStructureOffset() {
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      br.x = br.baseX + structureDX;
+      br.y = br.baseY;
+    }
+  }
+
+  function updateDodgeAI(dt) {
+    if (!level().dodge || !launched || gameOver || won || outro) {
+      structureDVX *= 0.9;
+      return;
+    }
+    // Centro actual del mech
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, n = 0;
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      minX = Math.min(minX, br.x); maxX = Math.max(maxX, br.x + br.w);
+      minY = Math.min(minY, br.y); maxY = Math.max(maxY, br.y + br.h);
+      n++;
+    }
+    if (!n) return;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const halfW = (maxX - minX) / 2;
+
+    // Predecir X de la bola cuando cruce la altura del mech
+    let threat = 0;
+    let predX = ball.x;
+    if (ball.vy < -0.05 && ball.y > minY) {
+      const frames = (ball.y - cy) / Math.max(0.05, -ball.vy);
+      if (frames > 0 && frames < 90) {
+        predX = ball.x + ball.vx * frames;
+        // rebotes simples en paredes
+        let px = predX, pvx = ball.vx;
+        for (let f = 0; f < Math.min(60, frames); f++) {
+          px += pvx;
+          if (px < ball.r) { px = ball.r; pvx = Math.abs(pvx); }
+          if (px > W - ball.r) { px = W - ball.r; pvx = -Math.abs(pvx); }
+        }
+        predX = px;
+        const dist = Math.abs(predX - cx);
+        if (dist < halfW + ball.r + 40) threat = 1.0 - dist / (halfW + 120);
+      }
+    } else if (Math.hypot(ball.x - cx, ball.y - cy) < halfW + 80 && ball.y < maxY + 40) {
+      predX = ball.x;
+      threat = 0.55;
+    }
+
+    let desired = 0;
+    if (threat > 0.05) {
+      // Escapar: alejarse del impacto predicho
+      desired = (predX < cx) ? 1 : -1;
+      // Si está casi centrado, elige el lado con más espacio
+      if (Math.abs(predX - cx) < 12) {
+        const roomL = cx - halfW - 8;
+        const roomR = W - 8 - (cx + halfW);
+        desired = roomR > roomL ? 1 : -1;
+      }
+    } else {
+      // Volver al centro con pereza
+      desired = structureDX > 8 ? -0.35 : structureDX < -8 ? 0.35 : 0;
+    }
+
+    const accel = 0.55 + threat * 1.1;
+    structureDVX += desired * accel * dt * 60;
+    structureDVX *= 0.92;
+    structureDVX = Math.max(-6.5, Math.min(6.5, structureDVX));
+    structureDX += structureDVX * dt * 60;
+
+    // Límites: que no se salga de pantalla
+    const structW = maxX - minX;
+    const maxDX = Math.max(0, (W - structW) / 2 - 6);
+    // base is centered; DX relative
+    const left = originX + structureDX;
+    const right = originX + imgW * fitScale + structureDX;
+    if (left < 6) { structureDX += 6 - left; structureDVX = Math.abs(structureDVX) * 0.4; }
+    if (right > W - 6) { structureDX -= right - (W - 6); structureDVX = -Math.abs(structureDVX) * 0.4; }
+
+    applyStructureOffset();
+  }
+
   function update(dt) {
     if (!running) return;
     if (paused) {
@@ -852,6 +948,7 @@
       paddle.x = cx - paddle.w / 2;
     }
     updateBg(dt);
+    updateDodgeAI(dt);
 
     // Cámara lenta al derrumbe final
     let simDt = dt;
@@ -1177,7 +1274,16 @@
 
     drawBackground();
     drawGround();
-    if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
+    if (brickLayer) {
+      if (structureDX) {
+        ctx.save();
+        ctx.translate(structureDX, 0);
+        ctx.drawImage(brickLayer, 0, 0, W, H);
+        ctx.restore();
+      } else {
+        ctx.drawImage(brickLayer, 0, 0, W, H);
+      }
+    }
     drawLooseBricks();
     drawParticles();
     drawBombs();
@@ -1299,6 +1405,7 @@
     setOverlay(packOverlay, false);
     if (typeof setPauseBtn === 'function') setPauseBtn(false);
     if (typeof setShopBtn === 'function') setShopBtn(false);
+    if (typeof setPackBtn === 'function') setPackBtn(false);
   }
   function openShop() {
     paused = true;
@@ -1423,11 +1530,15 @@
 
   const btnPauseImg = document.getElementById('btnPauseImg');
   const btnShopImg = document.getElementById('btnShopImg');
+  const btnPackImg = document.getElementById('btnPackImg');
   function setPauseBtn(on) {
     if (btnPauseImg) btnPauseImg.src = on ? 'btn-pause-on.png' : 'btn-pause.png';
   }
   function setShopBtn(on) {
     if (btnShopImg) btnShopImg.src = on ? 'btn-shop-on.png' : 'btn-shop.png';
+  }
+  function setPackBtn(on) {
+    if (btnPackImg) btnPackImg.src = on ? 'btn-pack-on.png' : 'btn-pack.png';
   }
 
   btnPause.addEventListener('pointerdown', () => setPauseBtn(true));
@@ -1450,11 +1561,15 @@
   btnShop.addEventListener('pointerdown', () => setShopBtn(true));
   btnShop.addEventListener('pointerup', () => { /* keep on while shop open */ });
   btnShop.addEventListener('click', (e) => { e.stopPropagation(); openShop(); setShopBtn(true); });
-  document.getElementById('btnPack').addEventListener('click', (e) => { e.stopPropagation(); openPack(); setShopBtn(false); });
+  const btnPack = document.getElementById('btnPack');
+  btnPack.addEventListener('pointerdown', () => setPackBtn(true));
+  btnPack.addEventListener('click', (e) => { e.stopPropagation(); openPack(); setShopBtn(false); setPackBtn(true); });
   document.getElementById('btnShopBack').addEventListener('click', (e) => {
-    e.stopPropagation(); openPause(); setShopBtn(false);
+    e.stopPropagation(); openPause(); setShopBtn(false); setPackBtn(false);
   });
-  document.getElementById('btnPackBack').addEventListener('click', (e) => { e.stopPropagation(); openPause(); });
+  document.getElementById('btnPackBack').addEventListener('click', (e) => {
+    e.stopPropagation(); openPause(); setPackBtn(false);
+  });
 
 
   (async function init() {
