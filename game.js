@@ -320,16 +320,25 @@
     hint.innerHTML = '<strong>Cámara lenta</strong><span>El mech se desmorona…</span>';
   }
 
+  function syncLevelUrl() {
+    try {
+      const u = new URL(location.href);
+      u.searchParams.set('level', String(levelIndex + 1));
+      history.replaceState(null, '', u.pathname + u.search);
+    } catch (_) {}
+  }
+
   function finishOutro() {
     if (outro === 'done' || won) return;
     outro = 'done';
     launched = false;
     bombs = [];
-    if (levelIndex < LEVELS.length - 1) {
+    const hasNext = levelIndex + 1 < LEVELS.length;
+    if (hasNext) {
+      const nextName = LEVELS[levelIndex + 1].name;
       hint.classList.add('show');
-      hint.innerHTML = '<strong>¡Mech destruido!</strong><span>Toca para el siguiente nivel</span>';
+      hint.innerHTML = `<strong>¡Mech destruido!</strong><span>Siguiente: ${nextName} · Toca o espera</span>`;
       updateHud();
-      // siguiente nivel al tocar / auto
       window.__gotoNext = true;
       setTimeout(() => { if (window.__gotoNext) startNextLevel(); }, 2200);
     } else {
@@ -343,8 +352,9 @@
 
   async function startNextLevel() {
     window.__gotoNext = false;
-    if (levelIndex >= LEVELS.length - 1) return;
+    if (levelIndex + 1 >= LEVELS.length) return;
     levelIndex++;
+    syncLevelUrl();
     loading.classList.remove('hide');
     loading.textContent = `Cargando ${level().name}…`;
     hint.classList.remove('show');
