@@ -13,9 +13,9 @@
   const MIN_BRICKS = 7000;
   const LEVELS = [
     { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', bg: 'bg.jpg', paddleScale: 1.0, groundFrac: 0.93, dodge: false },
-    { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false },
+    { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false, irregularBricks: true },
     { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7 },
-    { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.88, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
+    { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -425,6 +425,20 @@
       const br = bricks[i];
       if (br.alive && !br.falling && !br.settled) structureCount++;
     }
+    // Migajas: 1–pocos ladrillos “soportados” tras el derrumbe no deben bloquear la victoria
+    if (structureCount > 0 && structureCount <= 15) {
+      for (let i = 0; i < n; i++) {
+        const br = bricks[i];
+        if (!br.alive || br.falling || br.settled) continue;
+        clearBrickGrid(br, i);
+        br.falling = true;
+        br.vx = (Math.random() - 0.5) * 0.8;
+        br.vy = 0.2 + Math.random() * 0.5;
+        drawBrickToLayer(br);
+        detached++;
+      }
+      structureCount = 0;
+    }
     if (detached > 80) {
       bumpCam(4.2);
       hint.classList.add('show');
@@ -710,7 +724,7 @@
     playerBombArmed = false;
     setBombButton(false);
     bombTimer = 2.5;
-    score = 0;
+    // score se conserva entre niveles (solo compra lo gasta)
     lives = START_LIVES;
     gameOver = false;
     won = false;
@@ -926,10 +940,10 @@
     bumpCam(0.55);
     spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, br.hp <= 1 ? 14 : 8);
     br.hp -= ballDamage();
+    score += 1; // $1 por golpe
     if (br.hp <= 0) {
-      destroyBrick(br, br.maxHp * 10);
+      destroyBrick(br, 0);
     } else {
-      score += 5;
       drawBrickToLayer(br);
       updateHud();
     }
@@ -944,7 +958,7 @@
   function explodeAt(x, y, radius, ptsPerBrick) {
     bumpCam(radius && radius > EXPLODE_R ? 7.2 : 5.5);
     const R = radius != null ? radius : EXPLODE_R;
-    const pts = ptsPerBrick != null ? ptsPerBrick : 15;
+    const pts = ptsPerBrick != null ? ptsPerBrick : 1;
     const r2 = R * R;
     spawnDust(x, y, 'rgb(255,120,40)', radius && radius > EXPLODE_R ? 56 : 40);
     spawnDust(x, y, 'rgb(80,80,80)', radius && radius > EXPLODE_R ? 36 : 24);
@@ -1572,7 +1586,7 @@
       playerBomb.t = 0;
       bumpCam(1.2);
     } else if (playerBomb.phase === 'armed' && playerBomb.t >= 2) {
-      explodeAt(playerBomb.x, playerBomb.y, EXPLODE_R * 1.55, 22);
+      explodeAt(playerBomb.x, playerBomb.y, EXPLODE_R * 1.55, 1);
       playerBomb.alive = false;
       playerBomb = null;
       return;
@@ -1837,6 +1851,9 @@
     window.__gotoNext = false;
     if (won && levelIndex >= LEVELS.length - 1) {
       levelIndex = 0;
+      score = 0;
+      backpack = [];
+      ballSkinOn = false;
       loading.classList.remove('hide');
       loading.textContent = 'Cargando Nivel 1…';
       Promise.all([loadImage(), loadBg()]).then(() => { buildLevel(); loading.classList.add('hide'); });
@@ -2065,7 +2082,7 @@
         if (Math.abs(cx - x) > half) continue;
         if (br.y + br.h < 0 || br.y >= paddle.y) continue;
         spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
-        destroyBrick(br, 12);
+        destroyBrick(br, 1);
       }
     }
   }
