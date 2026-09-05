@@ -33,6 +33,7 @@
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
     { id: 'bomb', name: 'Bomba', desc: 'Explosión grande en el mech', icon: '💣', price: 1090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
+    { id: 'ballskin', name: 'Bola grabada', desc: 'Skin de bola · dureza +10%', icon: '🪩', price: 26799, minLevel: 3, img: 'ball-skin.png' },
   ];
   const PACK_MAX = 5;
   const MAX_BRICKS = 12000;
@@ -74,6 +75,9 @@
   let structureDX = 0;
   let structureDVX = 0;
   let fitScale = 1;
+  let ballSkinImg = null;
+  let ballSkinOn = false;
+  let baseBallR = 6;
   let bombTimer = 0;
   let structureCount = 0; // ladrillos aún en la estructura (no caídos)
   let outro = null; // null | 'slowmo' | 'done'
@@ -484,8 +488,10 @@
     bigPaddleUntil = 0;
 
     const diameter = Math.max(brickPx * 3.92, 12);
+    baseBallR = diameter / 2;
+    const r = ballSkinOn ? baseBallR * 1.1 : baseBallR;
     ball = {
-      r: diameter / 2,
+      r,
       x: 0, y: 0, vx: 0, vy: 0,
       speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7,
     };
@@ -621,11 +627,15 @@
     else updateHud();
   }
 
+  function ballDamage() {
+    return ballSkinOn ? 1.1 : 1; // +10% dureza
+  }
+
   function hitBrick(br) {
     if (!br.alive || br.falling || br.settled) return;
     bumpCam(0.55);
     spawnDust(br.x + br.w / 2, br.y + br.h / 2, br.color, br.hp <= 1 ? 14 : 8);
-    br.hp--;
+    br.hp -= ballDamage();
     if (br.hp <= 0) {
       destroyBrick(br, br.maxHp * 10);
     } else {
@@ -1148,6 +1158,15 @@
   }
 
   function drawBall() {
+    if (ballSkinOn && ballSkinImg) {
+      const s = ball.r * 2.15;
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.45)';
+      ctx.shadowBlur = 8;
+      ctx.drawImage(ballSkinImg, ball.x - s / 2, ball.y - s / 2, s, s);
+      ctx.restore();
+      return;
+    }
     const g = ctx.createRadialGradient(
       ball.x - ball.r * 0.35, ball.y - ball.r * 0.4, ball.r * 0.12,
       ball.x, ball.y, ball.r
@@ -1418,6 +1437,15 @@
     ]);
   }
 
+  function loadBallSkin() {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => { ballSkinImg = img; resolve(); };
+      img.onerror = () => { console.warn('ball-skin.png missing'); resolve(); };
+      img.src = 'ball-skin.png';
+    });
+  }
+
 
   // —— Pausa / Tienda / Mochila ——
   const pauseOverlay = document.getElementById('pauseOverlay');
@@ -1465,17 +1493,27 @@
   }
 
   function renderShop() {
-    shopList.innerHTML = SHOP.map((it) => {
+    const lvl = level().id;
+    shopList.innerHTML = SHOP.filter((it) => {
+      if (it.minLevel != null && lvl < it.minLevel) return false;
+      // bola: solo desde nivel 3; ocultar si ya equipada o en mochila
+      if (it.id === 'ballskin' && (ballSkinOn || backpack.includes('ballskin'))) return false;
+      return true;
+    }).map((it) => {
       const full = backpack.length >= PACK_MAX;
       const broke = score < it.price;
       const disabled = full || broke;
       let why = '';
       if (full) why = 'Mochila llena';
       else if (broke) why = 'Sin fondos';
+      const iconHtml = it.img
+        ? `<div class="icon"><img src="${it.img}" alt="" style="width:36px;height:36px;object-fit:contain;border-radius:50%"></div>`
+        : `<div class="icon">${it.icon}</div>`;
+      const priceLabel = it.price >= 1000 ? ('$' + it.price.toLocaleString('en-US')) : ('$' + it.price);
       return `<div class="shop-item">
-        <div class="icon">${it.icon}</div>
+        ${iconHtml}
         <div class="info"><div class="name">${it.name}</div><div class="desc">${it.desc}</div></div>
-        <div class="price">$${it.price}</div>
+        <div class="price">${priceLabel}</div>
         <button type="button" data-buy="${it.id}" ${disabled ? 'disabled' : ''}>${disabled ? why : 'Comprar'}</button>
       </div>`;
     }).join('');
@@ -1493,8 +1531,11 @@
     packList.innerHTML = backpack.map((id, idx) => {
       const it = SHOP.find((s) => s.id === id);
       if (!it) return '';
+      const iconHtml = it.img
+        ? `<div class="icon"><img src="${it.img}" alt="" style="width:36px;height:36px;object-fit:contain;border-radius:50%"></div>`
+        : `<div class="icon">${it.icon}</div>`;
       return `<div class="pack-item">
-        <div class="icon">${it.icon}</div>
+        ${iconHtml}
         <div class="info"><div class="name">${it.name}</div><div class="desc">${it.desc}</div></div>
         <button type="button" data-use="${idx}">Usar</button>
       </div>`;
@@ -1548,6 +1589,11 @@
       fireLaser();
       hint.classList.add('show');
       hint.innerHTML = '<strong>🔫 Láser</strong><span>Rayo disparado</span>';
+    } else if (id === 'ballskin') {
+      ballSkinOn = true;
+      if (ball && baseBallR) ball.r = baseBallR * 1.1;
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>🪩 Bola grabada</strong><span>Skin activa · dureza +10%</span>';
     }
     updateHud();
     renderPack();
@@ -1616,7 +1662,7 @@
 
   (async function init() {
     try {
-      await Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts()]);
+      await Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts(), loadBallSkin()]);
       buildLevel();
       loading.classList.add('hide');
       requestAnimationFrame(frame);
