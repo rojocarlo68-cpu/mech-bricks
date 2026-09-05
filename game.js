@@ -360,12 +360,14 @@
     }
   }
 
-  function forEachNeighborBrick(br, fn) {
-    if (br.neighbors && br.neighbors.length) {
+  function forEachNeighborBrick(br, fn, orthoOnly) {
+    if (br.neighbors && br.neighbors.length && !orthoOnly) {
       for (let i = 0; i < br.neighbors.length; i++) fn(br.neighbors[i]);
       return;
     }
-    const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const dirs = orthoOnly
+      ? [[1,0],[-1,0],[0,1],[0,-1]]
+      : [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
     const seen = Object.create(null);
     for (const c of brickCells(br)) {
       for (let d = 0; d < dirs.length; d++) {
@@ -392,7 +394,8 @@
     const n = bricks.length;
     const supported = new Uint8Array(n);
     const q = [];
-    const footCut = minIy + Math.floor((maxIy - minIy) * 0.80); // ~20% inferior = pies
+    const footFrac = level().jump ? 0.85 : 0.80;
+    const footCut = minIy + Math.floor((maxIy - minIy) * footFrac);
 
     if (level().fly) {
       const comp = new Int32Array(n);
@@ -457,7 +460,8 @@
         }
       }
 
-      // 8 vecinos = articulaciones más estables
+      // jump/L6: 4 vecinos (cortar el medio suelta el tope); otros: 8
+      const ortho = !!level().jump;
       while (q.length) {
         const i = q.pop();
         forEachNeighborBrick(bricks[i], (id) => {
@@ -466,7 +470,7 @@
           if (!nb.alive || nb.falling || nb.settled) return;
           supported[id] = 1;
           q.push(id);
-        });
+        }, ortho);
       }
     }
 
@@ -1523,21 +1527,24 @@
         continue;
       }
 
-      // Rebote suave entre escombros ya amontonados (altura de pila)
+      // Aterrizar sobre escombros O estructura que siga abajo (si partes el medio, cae encima)
       let stackTop = groundY;
-      // muestreo barato: unos settled cercanos
-      for (let k = 0; k < 6; k++) {
-        const o = bricks[(Math.random() * bricks.length) | 0];
-        if (!o.alive || !o.settled) continue;
-        if (Math.abs(o.x - br.x) > br.w * 1.2) continue;
+      const bcx = br.x + br.w * 0.5;
+      for (let i = 0; i < bricks.length; i++) {
+        const o = bricks[i];
+        if (o === br || !o.alive) continue;
+        if (o.falling && !o.settled) continue;
+        if (o.x + o.w < br.x - 1 || o.x > br.x + br.w + 1) continue;
+        const ocx = o.x + o.w * 0.5;
+        if (Math.abs(ocx - bcx) > (o.w + br.w) * 0.65) continue;
+        if (o.y + 1 < br.y) continue;
         stackTop = Math.min(stackTop, o.y);
       }
 
       if (br.y + br.h >= stackTop) {
         br.y = stackTop - br.h;
-        // amontonar con un poco de desorden
-        br.x += (Math.random() - 0.5) * br.w * 0.35;
-        br.vx *= 0.25;
+        br.x += (Math.random() - 0.5) * br.w * 0.2;
+        br.vx *= 0.2;
         br.vy = 0;
         br.falling = false;
         br.settled = true;
@@ -2310,30 +2317,34 @@
     drawPlayerBomb();
   }
   function drawMechShadow() {
-    // Sombra elíptica bajo los pies; se mueve con structureDX (y se suaviza si vuela)
-    let minX = Infinity, maxX = -Infinity, n = 0;
+    // Sombra elíptica bajo los pies; se mueve con structureDX
+    let minX = Infinity, maxX = -Infinity, footBottom = 0, n = 0;
     for (const br of bricks) {
       if (!br.alive || br.falling || br.settled) continue;
-      minX = Math.min(minX, br.baseX != null ? br.baseX : br.x);
-      maxX = Math.max(maxX, (br.baseX != null ? br.baseX : br.x) + br.w);
+      const bx = br.baseX != null ? br.baseX : br.x;
+      minX = Math.min(minX, bx);
+      maxX = Math.max(maxX, bx + br.w);
+      footBottom = Math.max(footBottom, (br.baseY != null ? br.baseY : br.y) + br.h);
       n++;
     }
     if (!n) return;
     const cx = (minX + maxX) / 2 + structureDX;
     const flying = !!level().fly;
     const jumping = !!level().jump;
-    const lift = (flying || jumping) ? Math.max(0, -structureDY) : 0;
-    const soft = (flying || jumping) ? Math.max(0.28, 1 - lift / 180) : 1;
-    const rw = Math.max(28, (maxX - minX) * 0.42) * (flying ? 0.85 : jumping && lift > 2 ? 0.9 : 1);
-    const rh = Math.max(8, brickPx * 2.2) * (flying ? 0.75 : jumping && lift > 2 ? 0.85 : 1);
-    const sy = groundY + rh * 0.15 + ((flying || jumping) ? Math.min(24, lift * 0.08) : 0);
+    if (flying) return;
+    const lift = jumping ? Math.max(0, -structureDY) : 0;
+    const soft = jumping ? Math.max(0.55, 1 - lift / 220) : 1;
+    const rw = Math.max(36, (maxX - minX) * (jumping ? 0.55 : 0.42));
+    const rh = Math.max(10, brickPx * (jumping ? 3.2 : 2.2)) * (lift > 2 ? 0.88 : 1);
+    const floorY = Math.max(groundY, footBottom + structureDY);
+    const sy = floorY + rh * 0.2 + (jumping ? Math.min(18, lift * 0.06) : 0);
     ctx.save();
     ctx.globalAlpha = soft;
     ctx.translate(cx, sy);
     ctx.scale(1, rh / rw);
-    const g = ctx.createRadialGradient(0, 0, rw * 0.15, 0, 0, rw);
-    g.addColorStop(0, flying ? 'rgba(0,0,0,0.28)' : jumping && lift > 8 ? 'rgba(0,0,0,0.32)' : 'rgba(0,0,0,0.45)');
-    g.addColorStop(0.55, flying ? 'rgba(0,0,0,0.12)' : jumping && lift > 8 ? 'rgba(0,0,0,0.14)' : 'rgba(0,0,0,0.22)');
+    const g = ctx.createRadialGradient(0, 0, rw * 0.12, 0, 0, rw);
+    g.addColorStop(0, jumping ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.45)');
+    g.addColorStop(0.5, jumping ? 'rgba(0,0,0,0.28)' : 'rgba(0,0,0,0.22)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
