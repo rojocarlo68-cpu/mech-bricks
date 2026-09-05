@@ -275,6 +275,7 @@
 
   function updateHud() {
     const unit = level().panels ? 'paneles' : 'ladrillos';
+    structureCount = countAliveStructureBricks();
     countEl.textContent = `${level().name} · ${structureCount} ${unit}`;
     const moneyTxt = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
     scoreEl.textContent = moneyTxt;
@@ -570,6 +571,23 @@
     return n;
   }
 
+  /** Live structure bricks still standing (not falling/settled rubble). */
+  function countAliveStructureBricks() {
+    let n = 0;
+    if (structures.length) {
+      for (const S of structures) {
+        for (const br of S.bricks) {
+          if (br.alive && !br.falling && !br.settled) n++;
+        }
+      }
+      return n;
+    }
+    for (const br of bricks) {
+      if (br.alive && !br.falling && !br.settled) n++;
+    }
+    return n;
+  }
+
   function startSlowMoOutro() {
     if (outro || won || gameOver || l6Transit) return;
     outro = 'slowmo';
@@ -658,15 +676,32 @@
     S.jumpPhase = jumpPhase;
     S.jumpCooldown = jumpCooldown;
     S.jumpTargetDX = jumpTargetDX;
-    // structureCount / structureStartCount: only recomputeSupport / spawn may set per-S
+    // Persist live standing-brick count for this structure (not the multi-S total)
+    let local = 0;
+    for (const br of bricks) {
+      if (br.alive && !br.falling && !br.settled) local++;
+    }
+    S.structureCount = local;
+    S.structureStartCount = structureStartCount;
     S.minIy = minIy;
     S.maxIy = maxIy;
   }
 
   function refreshTotalStructureCount() {
-    if (!structures.length) return structureCount;
+    // Always recompute from live bricks so multi-structure counts never go stale
+    if (!structures.length) {
+      structureCount = countAliveStructureBricks();
+      return structureCount;
+    }
     let total = 0;
-    for (const S of structures) total += S.structureCount | 0;
+    for (const S of structures) {
+      let local = 0;
+      for (const br of S.bricks) {
+        if (br.alive && !br.falling && !br.settled) local++;
+      }
+      S.structureCount = local;
+      total += local;
+    }
     structureCount = total;
     return total;
   }
@@ -771,16 +806,29 @@
   function maybeWin() {
     if (won || gameOver || outro === 'done' || l6Transit) return;
     refreshTotalStructureCount();
-    if (structureCount > 0) return;
+    const live = countAliveStructureBricks();
+    structureCount = live;
+    if (live > 0) return;
     // L6: wave 1 clear → finishOutro → l6PhaseTransition (camera + waves 2–3).
     // After wave 2+, wait for remaining pawn spawns before rook phase.
-    // Rook phase: wait until all 3 rooks spawned, then chess (not win).
-    // Chess phase: wait until both knights spawned, then real win.
+    // Rook phase: once towers are clear, always advance to chess (don't gate on spawn counter).
+    // Chess phase: wait until both knights spawned, then real win — unless half-state.
     if (level().id === 6 && !l6RookStarted) {
       if (l6Wave > 1 && (l6Wave < 3 || l6PendingSpawn)) return;
     }
-    if (level().id === 6 && l6RookStarted && !l6ChessStarted && l6RooksSpawned < 3) return;
-    if (level().id === 6 && l6ChessStarted && l6ChessSpawned < 2) return;
+    if (level().id === 6 && l6RookStarted && !l6ChessStarted && (l6Phase === 'rooks' || l6Phase === 'pawns')) {
+      // Treat spawned as at least structures that existed; never block forever when clear
+      l6RooksSpawned = Math.max(l6RooksSpawned | 0, structures.length | 0);
+      // fall through → finishOutro → l6ChessTransition
+    }
+    if (level().id === 6 && l6ChessStarted && l6ChessSpawned < 2) {
+      // Recoverable half-state: flag set but transit never ran / no knights
+      if (!l6Transit && !l6CamFX && l6ChessSpawned === 0 && l6Phase !== 'chess') {
+        l6ChessStarted = false;
+      } else {
+        return;
+      }
+    }
     // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria / L6 transit
     if (countFalling() > 0) startSlowMoOutro();
     else finishOutro();
@@ -973,7 +1021,9 @@
         stickBallToPaddle();
         launched = false;
       }
-      l6ChessPhase();
+      // Always enter chess spawn after head-turn (recover if prior half-state)
+      l6ChessStarted = true;
+      Promise.resolve(l6ChessPhase()).catch((e) => console.warn('l6ChessPhase', e));
       return;
     }
     hint.classList.add('show');
@@ -1048,7 +1098,12 @@
   }
 
   function livingL6Structures() {
-    return structures.filter((S) => (S.structureCount | 0) > 0);
+    return structures.filter((S) => {
+      for (const br of S.bricks) {
+        if (br.alive && !br.falling && !br.settled) return true;
+      }
+      return false;
+    });
   }
 
   function assignL6WallTargets(permute) {
@@ -1214,9 +1269,17 @@
   }
 
   async function l6ChessTransition() {
-    if (l6Transit || l6ChessStarted) return;
-    l6ChessStarted = true;
+    if (l6Transit) return;
+    // Idempotent: already in chess / mid-spawn — do nothing
+    if (l6Phase === 'chess' || l6ChessSpawned > 0) return;
+    // Recoverable half-state: started flag without transit/cam/knights → allow retry
+    if (l6ChessStarted && !l6CamFX) {
+      l6ChessStarted = false;
+    }
+    if (l6ChessStarted) return;
+    // Begin transit first; only then mark started (avoid half-state)
     l6Transit = true;
+    l6ChessStarted = true;
     clearL6Timers();
     bombs = [];
     playerBomb = null;
