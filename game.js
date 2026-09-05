@@ -14,7 +14,7 @@
   const LEVELS = [
     { id: 1, name: 'Nivel 1', mech: 'mech-level1.png', bg: 'bg.jpg', paddleScale: 1.0, groundFrac: 0.93, dodge: false },
     { id: 2, name: 'Nivel 2', mech: 'mech-level2.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: false, irregularBricks: true },
-    { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7 },
+    { id: 3, name: 'Nivel 3', mech: 'mech-level3.png', bg: 'bg-level2.jpg', paddleScale: 0.98, groundFrac: 0.80, dodge: true, mechScale: 0.7, irregularBricks: true },
     { id: 4, name: 'Nivel 4', mech: 'mech-level4.png', bg: 'bg-level4.jpg', paddleScale: 0.96, groundFrac: 0.84, dodge: true, fly: true, mechScale: 0.75, irregularBricks: true },
   ];
   let levelIndex = 0;
