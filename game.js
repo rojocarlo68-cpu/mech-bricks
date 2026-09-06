@@ -213,7 +213,7 @@
   let l8QueenUnderImg = null;
   let l8EyeFlashT = 0; // red eye flash countdown (seconds)
   let l8HeadStartCount = 0;
-  let l8HeadFrac = 0.155; // crown+face ≈ top 15.5% of queen sprite
+  let l8HeadFrac = 0.24; // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
   let l8Lasers = []; // {x0,y0,x1,y1,t,dur,w}
   let l8LaserCd = 0;
   let l8LasersDone = false;
@@ -256,11 +256,11 @@
     return { r: (r / n) | 0, g: (g / n) | 0, b: (b / n) | 0 };
   }
 
-  function loadMechSrc(src) {
+  function loadMechSrc(src, maxSideOpt) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
-        const maxSide = 900;
+        const maxSide = maxSideOpt != null ? maxSideOpt : 900;
         let w = img.naturalWidth, h = img.naturalHeight;
         const scale = Math.min(1, maxSide / Math.max(w, h));
         w = Math.round(w * scale);
@@ -2264,7 +2264,7 @@
     if (l8SpawnBusy) return null;
     l8SpawnBusy = true;
     try {
-      await loadMechSrc(level().queen || 'mech-level8-queen.png');
+      await loadMechSrc(level().queen || 'mech-level8-queen.png', 1600); // full-ish res for sharp face bricks
       const q = l8QueenDrawParams();
       if (!q || !imgW || !imgH) return null;
 
@@ -2279,9 +2279,12 @@
       originY = oy;
       fitScale = fit;
 
-      // Prefer denser cells for the small head band
-      let localCell = 8;
-      for (let c = 10; c >= 5; c--) {
+      // Cara: densísimo (≥7000) — celdas chicas; sin paneles irregulares
+      const HEAD_MIN = Math.max(MIN_BRICKS, 7000);
+      const HEAD_CAP = Math.max(MAX_BRICKS, 12000);
+      let localCell = 3;
+      let bestN = 0;
+      for (let c = 6; c >= 1; c--) {
         const ccols = Math.ceil(imgW / c);
         const headRows = Math.ceil((imgH * headFrac) / c);
         let n = 0;
@@ -2289,20 +2292,24 @@
           for (let ix = 0; ix < ccols; ix++) {
             if (avgCell(ix, iy, c)) {
               n++;
-              if (n >= 180) { localCell = c; break; }
+              if (n >= HEAD_CAP) break;
             }
           }
-          if (n >= 180) break;
+          if (n >= HEAD_CAP) break;
         }
-        if (n >= 180) { localCell = c; break; }
         localCell = c;
+        bestN = n;
+        // Prefer the coarsest cell that still hits ≥7000 (perf), else keep refining
+        if (n >= HEAD_MIN) break;
       }
+      console.log('[l8-head] cell', localCell, 'estBricks', bestN, 'img', imgW, imgH);
 
       const localCols = Math.ceil(imgW / localCell);
       const localRows = Math.ceil(imgH / localCell);
       const headMaxIy = Math.max(1, Math.ceil((imgH * headFrac) / localCell));
       const localCellScreen = localCell * fit;
-      const localBrickPx = Math.max(3.5, localCellScreen + 1.0);
+      // Brick screen size: keep tight so the face silhouette stays sharp
+      const localBrickPx = Math.max(2.2, localCellScreen + 0.55);
       const localGrid = new Int32Array(localCols * localRows);
       localGrid.fill(-1);
 
@@ -2317,9 +2324,10 @@
       maxIy = 0;
       groundY = 0;
 
+      const headBrickCap = HEAD_CAP;
       for (let iy = 0; iy < headMaxIy; iy++) {
         for (let ix = 0; ix < cols; ix++) {
-          if (bricks.length >= MAX_BRICKS) break;
+          if (bricks.length >= headBrickCap) break;
           const c = avgCell(ix, iy, cell);
           if (!c) continue;
           minIy = Math.min(minIy, iy);
@@ -2354,8 +2362,8 @@
         }
       }
       groundY += 0.5;
-      if (level().irregularBricks) mergeIrregularBricks();
-      // After merge, refresh UV from base vs queen origin
+      // NO merge irregular en la cabeza: los paneles grandes deforman la cara.
+      // Ladrillos finos ≥7000 = silueta nítida.
       for (const br of bricks) {
         if (br.l8u == null) {
           br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
