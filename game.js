@@ -2435,11 +2435,18 @@
   function l8EyeWorldPos(which) {
     const q = l8QueenDrawParams();
     if (!q) return { x: W * 0.5, y: H * 0.12 };
-    // Approximate glowing eyes on armored face (image UV)
-    const eyes = [
-      { u: 0.435, v: 0.100 },
-      { u: 0.490, v: 0.095 },
+    // UV calibrados a los ojos/visor rojos del sprite (armadura vs cráneo)
+    // Cabeza/fase láser usa underlayer (ojos redondos rojos).
+    const armoredEyes = [
+      { u: 0.430, v: 0.108 },
+      { u: 0.458, v: 0.107 },
     ];
+    const underEyes = [
+      { u: 0.406, v: 0.098 },
+      { u: 0.449, v: 0.095 },
+    ];
+    const useUnder = (l8Phase === 'head' || l8Phase === 'flash' || l8EyeFlashT > 0);
+    const eyes = useUnder ? underEyes : armoredEyes;
     const e = eyes[(which | 0) % eyes.length];
     return { x: q.dx + e.u * q.dw, y: q.dy + e.v * q.dh };
   }
@@ -2547,10 +2554,14 @@
     if (l8LaserCd <= 0 && l8Lasers.length === 0) {
       const eyeIdx = Math.random() < 0.5 ? 0 : 1;
       const e = l8EyeWorldPos(eyeIdx);
+      // Siempre diagonal hacia abajo; X al azar en la franja inferior
       const targetX = Math.random() * W;
-      const targetY = paddle
-        ? paddle.y + paddle.h * (0.2 + Math.random() * 0.6)
-        : H * (0.86 + Math.random() * 0.08);
+      let targetY = paddle
+        ? paddle.y + paddle.h * (0.15 + Math.random() * 0.7)
+        : H * (0.84 + Math.random() * 0.12);
+      // Garantizar que el rayo baje desde el ojo
+      targetY = Math.max(targetY, e.y + H * 0.35);
+      targetY = Math.min(H * 0.98, targetY);
       const dur = 0.65 + Math.random() * 0.5; // ~0.65–1.15s
       l8Lasers.push({
         x0: e.x, y0: e.y,
@@ -2567,6 +2578,11 @@
   function drawL8EyeLasers() {
     if (!l8Lasers.length) return;
     for (const L of l8Lasers) {
+      // Lock origin to the eye every frame (sway / phase)
+      if (L.eyeIdx != null) {
+        const e = l8EyeWorldPos(L.eyeIdx);
+        L.x0 = e.x; L.y0 = e.y;
+      }
       const u = L.t / Math.max(1e-6, L.dur);
       const fade = u < 0.12 ? u / 0.12 : (u > 0.85 ? (1 - u) / 0.15 : 1);
       const pulse = 0.75 + 0.25 * Math.sin(performance.now() * 0.04);
