@@ -678,7 +678,7 @@
       const br = bricks[i];
       if (br.alive && !br.falling && !br.settled) localCount++;
     }
-    // Colapso masivo: ≤30% de la estructura inicial → todo cae (por estructura / capa)
+    // Colapso masivo: ≤50% de la estructura inicial → todo cae (por estructura / capa)
     const collapseLayer = (layerName, startCount) => {
       if (!(startCount > 0)) return;
       let live = 0;
@@ -687,7 +687,7 @@
         if (layerName && br.layer !== layerName) continue;
         if (br.alive && !br.falling && !br.settled) live++;
       }
-      if (live <= 0 || live > startCount * 0.30) return;
+      if (live <= 0 || live > startCount * 0.50) return;
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
         if (layerName && br.layer !== layerName) continue;
@@ -704,7 +704,7 @@
       const ds = window.__dualStart || {};
       collapseLayer('lower', ds.lower || 0);
       collapseLayer('upper', ds.upper || 0);
-    } else if (localCount > 0 && structureStartCount > 0 && localCount <= structureStartCount * 0.30) {
+    } else if (localCount > 0 && structureStartCount > 0 && localCount <= structureStartCount * 0.50) {
       collapseLayer(null, structureStartCount);
     }
     localCount = 0;
@@ -2010,11 +2010,11 @@
     const dyFeet = gy - footFrac * dh;
     const dyFace = -dh * 0.02;
     const dy = dyFeet + (dyFace - dyFeet) * l8CamY;
-    // slight idle parallax after intro (keep feet feel planted — mostly X)
+    // Subtle queen sway after intro: slow sine DX left-right (feet stay planted)
     let px = 0, py = 0;
-    if (!l8Intro && l8Phase === 'hands') {
-      px = Math.sin(bgT * 0.35) * 4;
-      py = Math.cos(bgT * 0.28) * 1.5;
+    if (!l8Intro && (l8Phase === 'hands' || l8Phase === 'idle')) {
+      px = Math.sin(bgT * 0.22) * 14;
+      py = Math.cos(bgT * 0.18) * 1.8;
     }
     return { dx: dx + px, dy: dy + py, dw, dh };
   }
@@ -2070,9 +2070,10 @@
       const mechScale = level().mechScale != null ? level().mechScale : 0.58;
       const fit = Math.min(availW / imgW, availH / imgH) * mechScale;
       const ox = (W - imgW * fit) / 2;
-      const unusedH = availH - imgH * fit;
-      // Horizontal hands: band sits in upper third of playfield
-      const oy = pad + 4 + Math.max(0, unusedH * 0.10);
+      // Hands sit low — roughly bottom 25–40% of screen (closer to paddle)
+      const mechHApprox = imgH * fit;
+      const oyPreferred = H * 0.60; // top of hand band in lower half
+      const oy = Math.max(pad, Math.min(oyPreferred, H - paddleSpace - mechHApprox * 0.78));
       fillBricksFromImage(fit, ox, oy);
 
       const mechW = imgW * fitScale;
@@ -2083,8 +2084,11 @@
       } else {
         structureDX = (W + mechW * 0.42) - originX - mechW;
       }
-      // Start slightly higher then settle
-      structureDY = -Math.min(60, mechH * 0.06);
+      // vertical freedom — keep hands in lower quarter / near paddle
+      const padTop = H * 0.55;
+      const padBot = Math.min(H * 0.88, (paddle ? paddle.y : H * 0.9) - 28);
+      const homeDY = 0;
+      structureDY = homeDY;
       structureDVX = 0;
       structureDVY = 0;
       structureAngle = 0;
@@ -2097,12 +2101,12 @@
       const S = captureStructure();
       S.l8Side = side;
       S.homeDX = structureDX;
+      S.l8HomeDY = homeDY;
       S.l8AnchorDX = structureDX;
       S.l8MinInward = side === 'left' ? structureDX : structureDX - mechW * 0.22;
       S.l8MaxInward = side === 'left' ? structureDX + mechW * 0.22 : structureDX;
-      // vertical freedom
-      S.l8MinDY = -mechH * 0.25;
-      S.l8MaxDY = Math.max(40, H * 0.42 - (originY + mechH * 0.55));
+      S.l8MinDY = Math.max(-mechH * 0.10, padTop - originY);
+      S.l8MaxDY = Math.max(S.l8MinDY + 28, padBot - (originY + mechH * 0.55));
 
       structures.push(S);
       l8HandsSpawned = structures.length;
@@ -2188,7 +2192,8 @@
     if (threat > 0.08) {
       desiredY = predY < cy ? -1 : 1;
     } else {
-      desiredY = structureDY > 8 ? -0.35 : structureDY < -8 ? 0.25 : 0;
+      const homeY = (me && me.l8HomeDY != null) ? me.l8HomeDY : 0;
+      desiredY = structureDY > homeY + 8 ? -0.35 : structureDY < homeY - 8 ? 0.25 : 0;
     }
 
     const step = dt * 60;
@@ -2273,6 +2278,8 @@
         l8DebrisTimer = 1.4 + Math.random() * 1.6;
       }
     }
+    // Debris passes through hand bricks (structure) — only ball collides with debris.
+    // Despawn at ground / bottom of screen; light dust while falling + puff on impact.
     const floor = groundY > 0 ? groundY + 8 : H + 20;
     for (let i = l8Debris.length - 1; i >= 0; i--) {
       const d = l8Debris[i];
@@ -2282,7 +2289,21 @@
       d.x += d.vx * step;
       d.y += d.vy * step;
       d.rot += d.vr * step;
-      if (d.y + d.h >= floor || d.y > H + 30 || d.x + d.w < -40 || d.x > W + 40) {
+      // light dust trail while falling
+      d._dustT = (d._dustT || 0) - dt;
+      if (d._dustT <= 0 && d.vy > 0.2) {
+        d._dustT = 0.05 + Math.random() * 0.07;
+        spawnDust(d.x + d.w * 0.5, d.y + d.h * 0.5, `rgb(${d.r},${d.g},${d.b})`, 2, {
+          spread: 0.35, up: 0.15, jitter: 3,
+        });
+      }
+      const hitGround = d.y + d.h >= floor || d.y > H + 30;
+      if (hitGround || d.x + d.w < -40 || d.x > W + 40) {
+        if (hitGround) {
+          spawnDust(d.x + d.w * 0.5, Math.min(floor, H - 4), `rgb(${d.r},${d.g},${d.b})`, 7 + (Math.random() * 5) | 0, {
+            spread: 0.9, up: 1.4, ground: true, hemisphere: true, jitter: 8,
+          });
+        }
         l8Debris.splice(i, 1);
       }
     }
@@ -5014,6 +5035,8 @@
     }
     if (typeof setShopBtn === 'function') setShopBtn(false);
     if (typeof setPackBtn === 'function') setPackBtn(false);
+    if (typeof setSaveBtn === 'function') setSaveBtn(false);
+    if (typeof setLoadBtn === 'function') setLoadBtn(false);
   }
   function closeAllMenus() {
     paused = false;
@@ -5023,6 +5046,8 @@
     if (typeof setPauseBtn === 'function') setPauseBtn(false);
     if (typeof setShopBtn === 'function') setShopBtn(false);
     if (typeof setPackBtn === 'function') setPackBtn(false);
+    if (typeof setSaveBtn === 'function') setSaveBtn(false);
+    if (typeof setLoadBtn === 'function') setLoadBtn(false);
     if (laserAwaitUnpause) beginLaserWarmup();
   }
   function openShop() {
@@ -5279,6 +5304,95 @@
     updateLaserCdUi();
   }
 
+
+  const SAVE_KEY = 'mechBricksSave_v1';
+
+  function showMenuHint(title, sub, ms) {
+    hint.classList.add('show');
+    hint.innerHTML = `<strong>${title}</strong><span>${sub || ''}</span>`;
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (!gameOver) hint.classList.remove('show');
+    }, ms || 1800);
+  }
+
+  function saveGameProgress() {
+    try {
+      const payload = {
+        v: 1,
+        levelIndex,
+        score,
+        lives,
+        backpack: backpack.slice(),
+        activeBallSkin,
+        shieldCharges,
+        laserCannonsActive: !!laserCannonsActive,
+        laserExpireAt: laserCannonsActive ? (laserExpireAt || 0) : 0,
+        crackIntensity,
+      };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+      showMenuHint('Partida guardada', 'Guarda progreso (nivel, dinero, vidas, mochila)', 2200);
+    } catch (err) {
+      console.warn('save failed', err);
+      showMenuHint('No se pudo guardar', 'Revisa el almacenamiento del navegador', 2000);
+    }
+  }
+
+  async function loadGameProgress() {
+    let data = null;
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) {
+        showMenuHint('No hay partida guardada', 'Guarda progreso (nivel, dinero, vidas, mochila)', 2200);
+        return;
+      }
+      data = JSON.parse(raw);
+    } catch (err) {
+      console.warn('load parse failed', err);
+      showMenuHint('No hay partida guardada', 'Archivo inválido', 2000);
+      return;
+    }
+    if (!data || typeof data.levelIndex !== 'number') {
+      showMenuHint('No hay partida guardada', 'Datos incompletos', 2000);
+      return;
+    }
+    const li = Math.max(0, Math.min(LEVELS.length - 1, data.levelIndex | 0));
+    window.__gotoNext = false;
+    closeAllMenus();
+    setPauseBtn(false);
+    levelIndex = li;
+    syncLevelUrl();
+    loading.classList.remove('hide');
+    loading.textContent = `Cargando ${level().name}…`;
+    hint.classList.remove('show');
+    try {
+      await Promise.all([loadImage(), loadBg()]);
+      buildLevel();
+      // buildLevel resets lives — restore inventory/progress after
+      score = Math.max(0, data.score | 0);
+      lives = (typeof data.lives === 'number' && data.lives > 0) ? data.lives : START_LIVES;
+      backpack = Array.isArray(data.backpack) ? data.backpack.slice(0, PACK_MAX) : [];
+      activeBallSkin = data.activeBallSkin || null;
+      shieldCharges = Math.max(0, data.shieldCharges | 0);
+      if (typeof syncDamageFxFromLives === 'function') syncDamageFxFromLives();
+      if (ball && baseBallR) ball.r = baseBallR * ballRadiusMult();
+      if (data.laserCannonsActive && typeof startLaserCannons === 'function') {
+        try {
+          startLaserCannons();
+          if (data.laserExpireAt && data.laserExpireAt > performance.now()) {
+            laserExpireAt = data.laserExpireAt;
+          }
+        } catch (_) {}
+      }
+      updateHud();
+      loading.classList.add('hide');
+      showMenuHint('Partida cargada', `${level().name} · $` + score + ` · ♥` + lives, 2400);
+    } catch (err) {
+      loading.textContent = 'No pude cargar la partida.';
+      console.error(err);
+    }
+  }
+
   const btnPauseImg = document.getElementById('btnPauseImg');
   const btnShopImg = document.getElementById('btnShopImg');
   const btnPackImg = document.getElementById('btnPackImg');
@@ -5290,6 +5404,14 @@
   }
   function setPackBtn(on) {
     if (btnPackImg) btnPackImg.src = on ? 'btn-pack-on.png' : 'btn-pack.png';
+  }
+  const btnSaveImg = document.getElementById('btnSaveImg');
+  const btnLoadImg = document.getElementById('btnLoadImg');
+  function setSaveBtn(on) {
+    if (btnSaveImg) btnSaveImg.src = on ? 'btn-save-on.png' : 'btn-save.png';
+  }
+  function setLoadBtn(on) {
+    if (btnLoadImg) btnLoadImg.src = on ? 'btn-load-on.png' : 'btn-load.png';
   }
 
   btnPause.addEventListener('pointerdown', () => setPauseBtn(true));
@@ -5322,6 +5444,28 @@
     e.stopPropagation(); openPause(); setPackBtn(false);
   });
 
+  const btnSave = document.getElementById('btnSave');
+  if (btnSave) {
+    btnSave.addEventListener('pointerdown', () => setSaveBtn(true));
+    btnSave.addEventListener('pointerup', () => setSaveBtn(false));
+    btnSave.addEventListener('pointerleave', () => setSaveBtn(false));
+    btnSave.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setSaveBtn(false);
+      saveGameProgress();
+    });
+  }
+  const btnLoad = document.getElementById('btnLoad');
+  if (btnLoad) {
+    btnLoad.addEventListener('pointerdown', () => setLoadBtn(true));
+    btnLoad.addEventListener('pointerup', () => setLoadBtn(false));
+    btnLoad.addEventListener('pointerleave', () => setLoadBtn(false));
+    btnLoad.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setLoadBtn(false);
+      Promise.resolve(loadGameProgress()).catch((err) => console.warn('load', err));
+    });
+  }
 
   const btnBomb = document.getElementById('btnBomb');
   if (btnBomb) {
