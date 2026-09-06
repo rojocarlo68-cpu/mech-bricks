@@ -2241,8 +2241,20 @@
     const w = 10 + Math.random() * 22;
     const h = 8 + Math.random() * 18;
     const x = Math.random() * (W - w);
-    const gray = 70 + (Math.random() * 70) | 0;
-    const brown = (Math.random() * 35) | 0;
+    // Ocres: café, beige, crema, blanco, negro, gris, dorado
+    const palette = [
+      [92, 58, 32],    // café
+      [140, 98, 55],   // ocre
+      [186, 152, 108], // beige
+      [232, 214, 180], // crema
+      [245, 240, 230], // blanco cálido
+      [28, 26, 24],    // negro
+      [110, 110, 108], // gris
+      [72, 72, 70],    // gris oscuro
+      [198, 156, 62],  // dorado
+      [168, 128, 48],  // dorado oscuro
+    ];
+    const [r, g, b] = palette[(Math.random() * palette.length) | 0];
     l8Debris.push({
       x,
       y: -h - Math.random() * 40,
@@ -2252,10 +2264,9 @@
       vy: 0.4 + Math.random() * 0.9,
       rot: Math.random() * Math.PI * 2,
       vr: (Math.random() - 0.5) * 0.08,
-      r: gray,
-      g: gray - 8 + brown,
-      b: gray - 18 + (brown * 0.5) | 0,
+      r, g, b,
       alive: true,
+      hitPaddle: false,
     });
   }
 
@@ -2296,6 +2307,29 @@
         spawnDust(d.x + d.w * 0.5, d.y + d.h * 0.5, `rgb(${d.r},${d.g},${d.b})`, 2, {
           spread: 0.35, up: 0.15, jitter: 3,
         });
+      }
+      // Golpe a la paleta → 1/4 de vida (una vez por escombro)
+      if (
+        !d.hitPaddle &&
+        paddle &&
+        launched &&
+        !gameOver &&
+        !won &&
+        !outro &&
+        d.vy > 0 &&
+        d.y + d.h >= paddle.y &&
+        d.y <= paddle.y + paddle.h &&
+        d.x + d.w >= paddle.x - 2 &&
+        d.x <= paddle.x + paddle.w + 2
+      ) {
+        d.hitPaddle = true;
+        d.vy = -Math.abs(d.vy) * 0.35 - 0.8;
+        d.vx += (Math.random() - 0.5) * 1.2;
+        bumpCam(2.4);
+        spawnDust(d.x + d.w * 0.5, paddle.y, `rgb(${d.r},${d.g},${d.b})`, 8, {
+          spread: 1.1, up: 1.8, hemisphere: true, jitter: 10,
+        });
+        loseQuarterLife();
       }
       const hitGround = d.y + d.h >= floor || d.y > H + 30;
       if (hitGround || d.x + d.w < -40 || d.x > W + 40) {
