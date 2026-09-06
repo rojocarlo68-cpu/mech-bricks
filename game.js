@@ -4606,6 +4606,7 @@
       updateBg(dt);
       updateL8Intro(dt);
       updateL8Debris(dt);
+      updatePlayerBomb(dt);
       // paddle still tracks
       if (pointerX != null && paddle) {
         paddle.x = pointerX - paddle.w / 2;
@@ -4752,6 +4753,7 @@
 
     if (!launched) {
       if (level().queenBoss) updateL8Debris(dt);
+      updatePlayerBomb(dt);
       stickBallToPaddle();
       updateBallAirTrail(dt);
       return;
@@ -4772,8 +4774,9 @@
       updateBombs(dt);
       updatePlayerBomb(dt);
     } else {
-      bombs = [];
+      bombs = []; // no enemy bombs on L8
       updateL8Debris(dt);
+      updatePlayerBomb(dt); // shop bombs must still fly/detonate
     }
 
     const steps = 3;
@@ -5040,8 +5043,8 @@
     playerBomb.t += dt;
     playerBomb.x += playerBomb.vx * dt * 60;
     playerBomb.y += playerBomb.vy * dt * 60;
-    // leve deriva
-    playerBomb.vy += 0.04 * dt * 60;
+    // gravedad clara (antes 0.04 se sentía “colgada”)
+    playerBomb.vy += 0.12 * dt * 60;
 
     if (playerBomb.x - playerBomb.r < 0) { playerBomb.x = playerBomb.r; playerBomb.vx = Math.abs(playerBomb.vx); }
     if (playerBomb.x + playerBomb.r > W) { playerBomb.x = W - playerBomb.r; playerBomb.vx = -Math.abs(playerBomb.vx); }
@@ -6075,32 +6078,67 @@
     });
   }
 
+  function firePlayerBomb() {
+    if (!playerBombArmed || gameOver || won || outro || l6Transit) return false;
+    // If a previous bomb is stuck/dead, clear it so the button works again
+    if (playerBomb && (!playerBomb.alive || (Math.abs(playerBomb.vx) + Math.abs(playerBomb.vy) < 0.01 && playerBomb.t > 0.05))) {
+      playerBomb = null;
+    }
+    if (playerBomb) return false;
+    if (!ball && !paddle) return false;
+
+    let x = ball ? ball.x : (paddle.x + paddle.w / 2);
+    let y = ball ? ball.y : paddle.y;
+    let vx = 0, vy = -4.2;
+    if (launched && ball) {
+      const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
+      if (sp > 0.35) {
+        const ang = Math.atan2(ball.vy, ball.vx);
+        const speed = Math.max(2.2, sp * 0.5);
+        vx = Math.cos(ang) * speed;
+        vy = Math.sin(ang) * speed;
+        // Prefer upward-ish shot if ball is nearly horizontal toward paddle
+        if (vy > -0.6) vy = Math.min(vy, -2.4);
+      } else {
+        vx = (Math.random() - 0.5) * 0.8;
+        vy = -4.2;
+        x = ball.x; y = ball.y;
+      }
+    } else if (paddle) {
+      // Antes de servir: dispara hacia arriba desde la paleta
+      x = paddle.x + paddle.w / 2;
+      y = paddle.y - 10;
+      vx = (Math.random() - 0.5) * 0.6;
+      vy = -4.6;
+    }
+
+    playerBomb = {
+      x, y, vx, vy,
+      r: Math.max((ball && ball.r) ? ball.r * 1.15 : 8, 8),
+      phase: 'fuse',
+      t: 0,
+      alive: true,
+    };
+    playerBombArmed = false;
+    setBombButton(false);
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>💣 Bomba en camino</strong><span>Explota al tocar un ladrillo</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (!paused && !gameOver) hint.classList.remove('show');
+    }, 1400);
+    return true;
+  }
+
   const btnBomb = document.getElementById('btnBomb');
   if (btnBomb) {
-    btnBomb.addEventListener('click', (e) => {
+    const onBombPress = (e) => {
       e.stopPropagation();
       e.preventDefault();
-      if (!playerBombArmed || playerBomb || !ball || gameOver || won || outro || l6Transit) return;
-      if (!launched) return;
-      const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
-      const ang = Math.atan2(ball.vy, ball.vx);
-      const speed = sp * 0.5; // 50% más lenta que la bola
-      playerBomb = {
-        x: ball.x,
-        y: ball.y,
-        vx: Math.cos(ang) * speed,
-        vy: Math.sin(ang) * speed,
-        r: Math.max(ball.r * 1.15, 8),
-        phase: 'fuse',
-        t: 0,
-        alive: true,
-      };
-      playerBombArmed = false;
-      setBombButton(false);
-      hint.classList.add('show');
-      hint.innerHTML = '<strong>💣 Bomba en camino</strong><span>Explota al tocar un ladrillo</span>';
-      setTimeout(() => { if (!paused && launched) hint.classList.remove('show'); }, 1400);
-    });
+      firePlayerBomb();
+    };
+    btnBomb.addEventListener('pointerdown', onBombPress);
+    btnBomb.addEventListener('click', onBombPress);
   }
 
   (async function init() {
