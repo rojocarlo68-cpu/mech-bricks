@@ -2271,38 +2271,95 @@
     });
   }
 
+  function damageFromL8Debris() {
+    // 1/4 a 1/2 corazón por golpe
+    if (shieldCharges > 0) {
+      shieldCharges--;
+      triggerHurtFX(false);
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Escudo</strong><span>Escombro bloqueado</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => { if (!gameOver) hint.classList.remove('show'); }, 900);
+      updateHud();
+      return;
+    }
+    const dmg = Math.random() < 0.5 ? 0.25 : 0.5;
+    lives = Math.max(0, +(lives - dmg).toFixed(2));
+    triggerHurtFX(dmg >= 0.5);
+    bumpCam(dmg >= 0.5 ? 3.6 : 2.6);
+    hint.classList.add('show');
+    hint.innerHTML = dmg >= 0.5
+      ? '<strong>¡Escombro!</strong><span>−½ corazón</span>'
+      : '<strong>¡Escombro!</strong><span>−¼ corazón</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => { if (!gameOver && !paused) hint.classList.remove('show'); }, 1100);
+    updateHud();
+    checkGameOver();
+  }
+
   function updateL8Debris(dt) {
     if (!level().queenBoss) return;
     const step = dt * 60;
-    const debrisActive = !paused && !gameOver && !won && !l8Intro && !outro;
-    // Moderate spawn rate — not overwhelming (also rains while ball waits on paddle)
-    if (!l8Intro && l8Phase === 'hands' && debrisActive) {
+    const debrisActive = !paused && !gameOver && !won && !outro && l8Phase !== 'idle';
+    // Moderate spawn rate — rains during intro + hands (even if ball on paddle)
+    if ((l8Phase === 'hands' || l8Intro || l8Phase === 'intro') && debrisActive) {
       l8DebrisTimer -= dt;
       if (l8DebrisTimer <= 0) {
         spawnL8Debris();
         if (Math.random() < 0.28) spawnL8Debris();
-        l8DebrisTimer = 0.85 + Math.random() * 1.35;
-      }
-    } else if (l8Intro) {
-      // Light ambient rubble during intro
-      l8DebrisTimer -= dt;
-      if (l8DebrisTimer <= 0 && l8Debris.length < 4) {
-        spawnL8Debris();
-        l8DebrisTimer = 1.4 + Math.random() * 1.6;
+        l8DebrisTimer = (l8Intro ? 1.2 : 0.85) + Math.random() * (l8Intro ? 1.4 : 1.35);
       }
     }
-    // Debris passes through hand bricks (structure) — only ball + paddle collide.
-    // Despawn at playfield bottom near paddle (NOT Queen groundY mid-screen).
-    const floor = H - 4;
-    const padPad = 6; // widened paddle AABB
+    // Debris passes through hands — only ball + paddle. Floor = bottom of screen.
+    const floor = H + 2;
+    const padPadX = 10;
+    const padPadY = 14;
     for (let i = l8Debris.length - 1; i >= 0; i--) {
       const d = l8Debris[i];
       if (!d.alive) { l8Debris.splice(i, 1); continue; }
-      d.vy += 0.085 * step; // gravity
+
+      // Substeps avoid tunneling through the thin paddle at high fall speed
+      d.vy += 0.085 * step;
       d.vx *= 0.999;
-      d.x += d.vx * step;
-      d.y += d.vy * step;
-      d.rot += d.vr * step;
+      const moveX = d.vx * step;
+      const moveY = d.vy * step;
+      const dist = Math.hypot(moveX, moveY);
+      const subN = Math.max(1, Math.min(12, Math.ceil(dist / 4)));
+      const sx = moveX / subN;
+      const sy = moveY / subN;
+      for (let s = 0; s < subN; s++) {
+        const prevY = d.y;
+        const prevBottom = d.y + d.h;
+        d.x += sx;
+        d.y += sy;
+        d.rot += d.vr * (step / subN);
+
+        if (
+          !d.hitPaddle &&
+          paddle &&
+          debrisActive &&
+          paddle.h > 0 &&
+          // swept: crossing or overlapping paddle band this substep
+          (
+            (d.y + d.h >= paddle.y - padPadY && d.y <= paddle.y + paddle.h + padPadY) ||
+            (prevBottom < paddle.y - padPadY && d.y + d.h >= paddle.y - padPadY) ||
+            (prevY > paddle.y + paddle.h + padPadY && d.y <= paddle.y + paddle.h + padPadY)
+          ) &&
+          d.x + d.w >= paddle.x - padPadX &&
+          d.x <= paddle.x + paddle.w + padPadX
+        ) {
+          d.hitPaddle = true;
+          d.y = paddle.y - d.h - 1;
+          d.vy = -Math.abs(d.vy) * 0.25 - 1.2;
+          d.vx += (Math.random() - 0.5) * 1.6;
+          spawnDust(d.x + d.w * 0.5, paddle.y, `rgb(${d.r},${d.g},${d.b})`, 10, {
+            spread: 1.2, up: 2.0, hemisphere: true, jitter: 12,
+          });
+          damageFromL8Debris();
+          break;
+        }
+      }
+
       // light dust trail while falling
       d._dustT = (d._dustT || 0) - dt;
       if (d._dustT <= 0 && d.vy > 0.2) {
@@ -2311,30 +2368,11 @@
           spread: 0.35, up: 0.15, jitter: 3,
         });
       }
-      // Golpe a la paleta → 1/4 de vida (una vez por escombro; OK while waiting to launch)
-      if (
-        !d.hitPaddle &&
-        paddle &&
-        debrisActive &&
-        d.vy > 0 &&
-        d.y + d.h >= paddle.y - padPad &&
-        d.y <= paddle.y + paddle.h + padPad &&
-        d.x + d.w >= paddle.x - padPad &&
-        d.x <= paddle.x + paddle.w + padPad
-      ) {
-        d.hitPaddle = true;
-        d.vy = -Math.abs(d.vy) * 0.35 - 0.8;
-        d.vx += (Math.random() - 0.5) * 1.2;
-        bumpCam(2.4);
-        spawnDust(d.x + d.w * 0.5, paddle.y, `rgb(${d.r},${d.g},${d.b})`, 8, {
-          spread: 1.1, up: 1.8, hemisphere: true, jitter: 10,
-        });
-        loseQuarterLife();
-      }
-      const hitGround = d.y + d.h >= floor || d.y > H + 30;
+
+      const hitGround = d.y + d.h >= floor || d.y > H + 40;
       if (hitGround || d.x + d.w < -40 || d.x > W + 40) {
-        if (hitGround) {
-          spawnDust(d.x + d.w * 0.5, floor, `rgb(${d.r},${d.g},${d.b})`, 7 + (Math.random() * 5) | 0, {
+        if (hitGround && !d.hitPaddle) {
+          spawnDust(d.x + d.w * 0.5, H - 6, `rgb(${d.r},${d.g},${d.b})`, 7 + (Math.random() * 5) | 0, {
             spread: 0.9, up: 1.4, ground: true, hemisphere: true, jitter: 8,
           });
         }
