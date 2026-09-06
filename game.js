@@ -34,8 +34,7 @@
       const n = parseInt(q.get('level') || q.get('n') || '1', 10);
       if (n >= 1 && n <= LEVELS.length) levelIndex = n - 1;
       const phase = (q.get('phase') || q.get('skip') || '').toLowerCase();
-      if (phase === 'head' || phase === 'cabeza' || phase === 'hands' || phase === 'manos') {
-        // 'hands'/'manos' as skip aliases meant "after hands" historically — treat as head
+      if (phase === 'head' || phase === 'cabeza' || phase === 'after-hands' || phase === 'post-manos') {
         l8BootSkipToHead = true;
       }
     } catch (_) {}
