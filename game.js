@@ -26,11 +26,18 @@
   function level() { return LEVELS[levelIndex]; }
   function levelBallSpeedMult() { return level().ballSpeed || 1; }
   // ?level=2 para probar nivel 2 directo
+  // ?level=8&phase=head — saltar a fase de cabeza (sin manos)
+  let l8BootSkipToHead = false;
   (function bootLevelFromUrl() {
     try {
       const q = new URLSearchParams(location.search);
       const n = parseInt(q.get('level') || q.get('n') || '1', 10);
       if (n >= 1 && n <= LEVELS.length) levelIndex = n - 1;
+      const phase = (q.get('phase') || q.get('skip') || '').toLowerCase();
+      if (phase === 'head' || phase === 'cabeza' || phase === 'hands' || phase === 'manos') {
+        // 'hands'/'manos' as skip aliases meant "after hands" historically — treat as head
+        l8BootSkipToHead = true;
+      }
     } catch (_) {}
   })();
 
@@ -3000,6 +3007,24 @@
         speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult(),
       };
       stickBallToPaddle();
+      if (l8BootSkipToHead) {
+        // Atajo de prueba: sin intro ni manos → directo a cabeza
+        l8Intro = false;
+        l8IntroT = 999;
+        l8CamY = 1;
+        l8HandsSpawned = 2;
+        l8HandSpawnAt = 0;
+        l8Phase = 'hands'; // beginL8HeadPhase espera hands→head
+        l8EyeFlashT = 0;
+        l8HeadStartCount = 0;
+        l8Lasers = [];
+        l8LaserCd = 0;
+        l8LasersDone = false;
+        updateHud();
+        running = true;
+        beginL8HeadPhase();
+        return;
+      }
       l8Intro = true;
       l8IntroT = 0;
       l8CamY = 0;
