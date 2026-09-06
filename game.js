@@ -4340,6 +4340,21 @@
     setOverlay(pauseOverlay, true);
     setOverlay(shopOverlay, false);
     setOverlay(packOverlay, false);
+    // Asegurar que tienda/mochila sigan visibles en el menú de pausa
+    const shopBtn = document.getElementById('btnShop');
+    const packBtn = document.getElementById('btnPack');
+    if (shopBtn) {
+      shopBtn.style.display = '';
+      shopBtn.style.visibility = 'visible';
+      shopBtn.hidden = false;
+    }
+    if (packBtn) {
+      packBtn.style.display = '';
+      packBtn.style.visibility = 'visible';
+      packBtn.hidden = false;
+    }
+    if (typeof setShopBtn === 'function') setShopBtn(false);
+    if (typeof setPackBtn === 'function') setPackBtn(false);
   }
   function closeAllMenus() {
     paused = false;
