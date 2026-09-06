@@ -20,7 +20,7 @@
     { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', bgC: 'bg-level6c.jpg', waves: 3, paddleScale: 0.8846, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.0404, brickDamageMult: 1.2 },
     { id: 7, name: 'Nivel 7', mech: 'mech-level7-upper.png', mechLower: 'mech-level7-lower.png', bg: 'bg-level7.jpg', dualLayer: true, irregularBricks: true, mechScale: 1.24, paddleScale: 0.86, groundFrac: 0.88, dodge: true, ballSpeed: 1.05, brickDamageMult: 1.25 },
     // Levels ≥8: harder scale (~−2% paddle, +2% ball vs L7 cascade). Only L8 exists beyond 7 for now.
-    { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8259, groundFrac: 0.82, dodge: true, ballSpeed: 1.0924, brickDamageMult: 1.3 },
+    { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', queenUnder: 'mech-level8-queen-under.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8259, groundFrac: 0.82, dodge: true, ballSpeed: 1.0924, brickDamageMult: 1.3 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -164,10 +164,19 @@
   let l8QueenImg = null;
   let l8HandsSpawned = 0;
   let l8HandSpawnAt = 0; // performance.now() when left hand spawned; right at +5s
-  let l8Phase = 'idle'; // idle | intro | hands
+  let l8Phase = 'idle'; // idle | intro | hands | head | flash
   let l8SpawnBusy = false;
   let l8Debris = [];
   let l8DebrisTimer = 0;
+  let l8QueenUnderImg = null;
+  let l8EyeFlashT = 0; // red eye flash countdown (seconds)
+  let l8HeadStartCount = 0;
+  let l8HeadFrac = 0.155; // crown+face ≈ top 15.5% of queen sprite
+  let l8Lasers = []; // {x0,y0,x1,y1,t,dur,w}
+  let l8LaserCd = 0;
+  let l8LasersDone = false;
+  let l8HeadOriginX = 0;
+  let l8HeadOriginY = 0;
 
   function size() {
     return {
@@ -300,8 +309,12 @@
       // Queen is pure backdrop; brick imgData filled when hands spawn
       imgData = new Uint8ClampedArray(4);
       imgW = 1; imgH = 1;
-      return loadImg(level().queen || 'mech-level8-queen.png').then((img) => {
+      return Promise.all([
+        loadImg(level().queen || 'mech-level8-queen.png'),
+        loadImg(level().queenUnder || 'mech-level8-queen-under.png').catch(() => null),
+      ]).then(([img, under]) => {
         l8QueenImg = img;
+        l8QueenUnderImg = under;
       });
     }
     if (level().dualLayer && level().mechLower) {
@@ -767,7 +780,13 @@
 
   function startSlowMoOutro() {
     if (outro || won || gameOver || l6Transit) return;
-    if (level().queenBoss && (l8Intro || l8HandsSpawned < 2)) return;
+    if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'idle')) return;
+    if (level().queenBoss && l8Phase === 'hands' && l8HandsSpawned < 2) return;
+    // Hands clear → head phase instead of crumple outro
+    if (level().queenBoss && l8Phase === 'hands' && l8HandsSpawned >= 2) {
+      beginL8HeadPhase();
+      return;
+    }
     outro = 'slowmo';
     outroT = 0;
     bombs = [];
@@ -919,6 +938,11 @@
 
   function finishOutro() {
     if (outro === 'done' || won) return;
+    // L8 hands clear → head phase (never "Zona despejada" early)
+    if (level().queenBoss && l8Phase === 'hands' && l8HandsSpawned >= 2) {
+      beginL8HeadPhase();
+      return;
+    }
     // L6 wave 1 clear → camera turn + more mechs (not next level)
     if (level().id === 6 && l6Wave === 1) {
       outro = null;
@@ -983,12 +1007,22 @@
 
   function maybeWin() {
     if (won || gameOver || outro === 'done' || l6Transit) return;
-    // L8: no win during intro / before both hands have spawned
-    if (level().queenBoss && (l8Intro || l8Phase !== 'hands' || l8HandsSpawned < 2)) return;
+    // L8: no win during intro / before both hands / during head spawn
+    if (level().queenBoss) {
+      if (l8Intro || l8Phase === 'intro' || l8Phase === 'idle') return;
+      if (l8Phase === 'hands' && l8HandsSpawned < 2) return;
+      if (l8Phase === 'head' && l8SpawnBusy) return;
+      if (l8Phase !== 'hands' && l8Phase !== 'head') return;
+    }
     refreshTotalStructureCount();
     const live = countAliveStructureBricks();
     structureCount = live;
     if (live > 0) return;
+    // L8 hands cleared → head phase (not level win)
+    if (level().queenBoss && l8Phase === 'hands' && l8HandsSpawned >= 2) {
+      beginL8HeadPhase();
+      return;
+    }
     // L6: wave 1 clear → finishOutro → l6PhaseTransition (camera + waves 2–3).
     // After wave 2+, wait for remaining pawn spawns before rook phase.
     // Rook phase: once towers are clear, always advance to chess (don't gate on spawn counter).
@@ -1987,6 +2021,13 @@
     l8SpawnBusy = false;
     l8Debris = [];
     l8DebrisTimer = 0.6 + Math.random() * 0.8;
+    l8EyeFlashT = 0;
+    l8HeadStartCount = 0;
+    l8Lasers = [];
+    l8LaserCd = 0;
+    l8LasersDone = false;
+    l8HeadOriginX = 0;
+    l8HeadOriginY = 0;
   }
 
   function l8EaseInOut(u) {
@@ -2013,7 +2054,7 @@
     const dy = dyFeet + (dyFace - dyFeet) * l8CamY;
     // Subtle queen sway after intro: slow sine DX left-right (feet stay planted)
     let px = 0, py = 0;
-    if (!l8Intro && (l8Phase === 'hands' || l8Phase === 'idle')) {
+    if (!l8Intro && (l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'idle')) {
       px = Math.sin(bgT * 0.22) * 14;
       py = Math.cos(bgT * 0.18) * 1.8;
     }
@@ -2026,6 +2067,15 @@
     ctx.save();
     ctx.globalAlpha = 1;
     ctx.drawImage(l8QueenImg, q.dx, q.dy, q.dw, q.dh);
+    // Head phase: underlayer skull clipped to head AABB (same transform as body)
+    if ((l8Phase === 'head' || l8EyeFlashT > 0) && l8QueenUnderImg && l8QueenUnderImg.naturalWidth) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(q.dx, q.dy, q.dw, q.dh * l8HeadFrac);
+      ctx.clip();
+      ctx.drawImage(l8QueenUnderImg, q.dx, q.dy, q.dw, q.dh);
+      ctx.restore();
+    }
     // Soft darkness so hands/paddle read on top
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, 'rgba(4,2,10,0.15)');
@@ -2126,6 +2176,401 @@
     }
   }
 
+
+  function clearL8HandStructures() {
+    structures = [];
+    bricks = [];
+    grid = new Int32Array(1); grid[0] = -1;
+    brickLayer = null;
+    structureCount = 0;
+    structureStartCount = 0;
+    aliveCount = 0;
+    structureDX = 0; structureDY = 0;
+    structureDVX = 0; structureDVY = 0;
+    structureAngle = 0; structureAV = 0;
+    originX = 0; originY = 0;
+    fitScale = 1;
+  }
+
+  function beginL8HeadPhase() {
+    if (!level().queenBoss) return;
+    if (l8Phase === 'head' || l8Phase === 'flash') return;
+    outro = null;
+    outroT = 0;
+    window.__outroDust = false;
+    window.__gotoNext = false;
+    clearL8HandStructures();
+    l8Phase = 'head';
+    l8EyeFlashT = 1.0;
+    l8Lasers = [];
+    l8LaserCd = 0.9 + Math.random() * 0.6;
+    l8LasersDone = false;
+    l8HeadStartCount = 0;
+    bumpCam(6);
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Su cabeza!</strong><span>Destruye el casco · esquiva el láser</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (launched && !gameOver && !paused) hint.classList.remove('show');
+    }, 2800);
+    Promise.resolve(spawnL8Head()).catch((e) => console.warn('l8 head', e));
+  }
+
+  /** Build irregular bricks for queen HEAD only; positions track l8QueenDrawParams each frame. */
+  async function spawnL8Head() {
+    if (!level().queenBoss || won || gameOver) return null;
+    if (l8SpawnBusy) return null;
+    l8SpawnBusy = true;
+    try {
+      await loadMechSrc(level().queen || 'mech-level8-queen.png');
+      const q = l8QueenDrawParams();
+      if (!q || !imgW || !imgH) return null;
+
+      const headFrac = l8HeadFrac;
+      const fit = q.dw / imgW;
+      const ox = q.dx;
+      const oy = q.dy;
+      l8HeadOriginX = ox;
+      l8HeadOriginY = oy;
+
+      originX = ox;
+      originY = oy;
+      fitScale = fit;
+
+      // Prefer denser cells for the small head band
+      let localCell = 8;
+      for (let c = 10; c >= 5; c--) {
+        const ccols = Math.ceil(imgW / c);
+        const headRows = Math.ceil((imgH * headFrac) / c);
+        let n = 0;
+        for (let iy = 0; iy < headRows; iy++) {
+          for (let ix = 0; ix < ccols; ix++) {
+            if (avgCell(ix, iy, c)) {
+              n++;
+              if (n >= 180) { localCell = c; break; }
+            }
+          }
+          if (n >= 180) break;
+        }
+        if (n >= 180) { localCell = c; break; }
+        localCell = c;
+      }
+
+      const localCols = Math.ceil(imgW / localCell);
+      const localRows = Math.ceil(imgH / localCell);
+      const headMaxIy = Math.max(1, Math.ceil((imgH * headFrac) / localCell));
+      const localCellScreen = localCell * fit;
+      const localBrickPx = Math.max(3.5, localCellScreen + 1.0);
+      const localGrid = new Int32Array(localCols * localRows);
+      localGrid.fill(-1);
+
+      cell = localCell;
+      cols = localCols;
+      rows = localRows;
+      cellScreen = localCellScreen;
+      brickPx = localBrickPx;
+      grid = localGrid;
+      bricks = [];
+      minIy = localRows;
+      maxIy = 0;
+      groundY = 0;
+
+      for (let iy = 0; iy < headMaxIy; iy++) {
+        for (let ix = 0; ix < cols; ix++) {
+          if (bricks.length >= MAX_BRICKS) break;
+          const c = avgCell(ix, iy, cell);
+          if (!c) continue;
+          minIy = Math.min(minIy, iy);
+          maxIy = Math.max(maxIy, iy);
+          const bx = originX + ix * cellScreen;
+          const by = originY + iy * cellScreen;
+          const br = {
+            ix, iy,
+            baseX: bx,
+            baseY: by,
+            x: bx,
+            y: by,
+            w: brickPx,
+            h: brickPx,
+            color: `rgb(${c.r},${c.g},${c.b})`,
+            hp: 1,
+            maxHp: 1,
+            alive: true,
+            falling: false,
+            settled: false,
+            vx: 0,
+            vy: 0,
+            // Queen-local UV (fraction of full sprite) — synced every frame
+            l8u: (ix * cell) / imgW,
+            l8v: (iy * cell) / imgH,
+            l8uw: cell / imgW,
+            l8vh: cell / imgH,
+          };
+          groundY = Math.max(groundY, br.y + br.h);
+          grid[iy * cols + ix] = bricks.length;
+          bricks.push(br);
+        }
+      }
+      groundY += 0.5;
+      if (level().irregularBricks) mergeIrregularBricks();
+      // After merge, refresh UV from base vs queen origin
+      for (const br of bricks) {
+        if (br.l8u == null) {
+          br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
+          br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
+          br.l8uw = br.w / Math.max(1e-6, imgW * fitScale);
+          br.l8vh = br.h / Math.max(1e-6, imgH * fitScale);
+        }
+      }
+
+      brickLayer = document.createElement('canvas');
+      brickLayer.width = Math.floor(W * dpr);
+      brickLayer.height = Math.floor(H * dpr);
+      const lctx = brickLayer.getContext('2d');
+      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lctx.clearRect(0, 0, W, H);
+      for (const br of bricks) drawBrickToLayer(br);
+
+      structureCount = bricks.length;
+      structureStartCount = structureCount;
+      l8HeadStartCount = structureCount;
+      structureDX = 0;
+      structureDVX = 0;
+      structureDY = 0;
+      structureDVY = 0;
+      structureAngle = 0;
+      structureAV = 0;
+      jumpPhase = 'ground';
+      jumpCooldown = 99;
+      jumpTargetDX = 0;
+      applyStructureOffset();
+
+      const S = captureStructure();
+      S.l8Head = true;
+      structures = [S];
+      refreshTotalStructureCount();
+      aliveCount = bricks.length;
+      applyStructure(structures[0]);
+      syncL8HeadToQueen();
+      updateHud();
+      bumpCam(3.2);
+      return S;
+    } finally {
+      l8SpawnBusy = false;
+    }
+  }
+
+  /** Lock head structure to the SAME queen draw params (sway DX/DY only — no drift). */
+  function syncL8HeadToQueen() {
+    if (!level().queenBoss || l8Phase !== 'head') return;
+    if (!structures.length) return;
+    const q = l8QueenDrawParams();
+    if (!q) return;
+    eachStructure((S) => {
+      if (!S || !S.l8Head) return;
+      // originX/Y frozen at spawn (= queen dx/dy then). Sway → structure offset.
+      structureDX = q.dx - originX;
+      structureDY = q.dy - originY;
+      structureDVX = 0;
+      structureDVY = 0;
+      structureAngle = 0;
+      structureAV = 0;
+      applyStructureOffset();
+    });
+  }
+
+  function l8EyeWorldPos(which) {
+    const q = l8QueenDrawParams();
+    if (!q) return { x: W * 0.5, y: H * 0.12 };
+    // Approximate glowing eyes on armored face (image UV)
+    const eyes = [
+      { u: 0.435, v: 0.100 },
+      { u: 0.490, v: 0.095 },
+    ];
+    const e = eyes[(which | 0) % eyes.length];
+    return { x: q.dx + e.u * q.dw, y: q.dy + e.v * q.dh };
+  }
+
+  function distPointToSegment(px, py, x0, y0, x1, y1) {
+    const dx = x1 - x0, dy = y1 - y0;
+    const len2 = dx * dx + dy * dy;
+    if (len2 < 1e-6) return Math.hypot(px - x0, py - y0);
+    let t = ((px - x0) * dx + (py - y0) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
+  }
+
+  function l8LaserHitsPaddle(L) {
+    if (!paddle) return false;
+    const pad = {
+      x: paddle.x,
+      y: paddle.y,
+      w: paddle.w,
+      h: paddle.h,
+    };
+    // Thick beam: sample distance from paddle AABB (center + corners) to segment
+    const halfW = Math.max(10, L.w * 0.5);
+    const cx = pad.x + pad.w / 2;
+    const cy = pad.y + pad.h / 2;
+    const samples = [
+      [cx, cy],
+      [pad.x, pad.y],
+      [pad.x + pad.w, pad.y],
+      [pad.x, pad.y + pad.h],
+      [pad.x + pad.w, pad.y + pad.h],
+      [cx, pad.y],
+      [cx, pad.y + pad.h],
+    ];
+    for (const [px, py] of samples) {
+      if (distPointToSegment(px, py, L.x0, L.y0, L.x1, L.y1) <= halfW + 4) return true;
+    }
+    // Also: segment vs expanded AABB (Liang-Barsky-ish via endpoints + mid)
+    const ex = pad.x - halfW, ey = pad.y - halfW;
+    const ew = pad.w + halfW * 2, eh = pad.h + halfW * 2;
+    const pts = [[L.x0, L.y0], [L.x1, L.y1], [(L.x0 + L.x1) / 2, (L.y0 + L.y1) / 2]];
+    for (const [px, py] of pts) {
+      if (px >= ex && px <= ex + ew && py >= ey && py <= ey + eh) return true;
+    }
+    return false;
+  }
+
+  function damageFromL8EyeLaser(dt) {
+    // Shield blocks the beam for a short grace after consuming one charge
+    if (window.__l8LaserShieldUntil && performance.now() < window.__l8LaserShieldUntil) {
+      return;
+    }
+    if (shieldCharges > 0) {
+      shieldCharges--;
+      window.__l8LaserShieldUntil = performance.now() + 900;
+      triggerHurtFX(false);
+      updateHud();
+      return;
+    }
+    const dmg = dt * 0.5; // 0.5 heart per second of contact
+    lives = Math.max(0, +(lives - dmg).toFixed(3));
+    if (!window.__l8LaserHurtT || performance.now() - window.__l8LaserHurtT > 180) {
+      window.__l8LaserHurtT = performance.now();
+      triggerHurtFX(false);
+      bumpCam(1.1);
+    }
+    updateHud();
+    checkGameOver();
+  }
+
+  function updateL8EyeLasers(dt) {
+    if (!level().queenBoss || l8Phase !== 'head') return;
+    if (won || gameOver || outro || l8SpawnBusy) return;
+
+    // Stop lasers permanently once ≥70% head bricks destroyed
+    if (!l8LasersDone && l8HeadStartCount > 0) {
+      const live = countAliveStructureBricks();
+      const destroyed = l8HeadStartCount - live;
+      if (destroyed / l8HeadStartCount >= 0.70) {
+        l8LasersDone = true;
+        l8Lasers = [];
+      }
+    }
+
+    // Refresh beam origins to follow queen sway while active
+    for (const L of l8Lasers) {
+      if (L.eyeIdx != null) {
+        const e = l8EyeWorldPos(L.eyeIdx);
+        L.x0 = e.x; L.y0 = e.y;
+      }
+      L.t += dt;
+      if (
+        !paused && !gameOver && !won && launched &&
+        L.t < L.dur && l8LaserHitsPaddle(L)
+      ) {
+        damageFromL8EyeLaser(dt);
+      }
+    }
+    l8Lasers = l8Lasers.filter((L) => L.t < L.dur);
+
+    if (l8LasersDone) return;
+    if (paused || !launched) return;
+
+    l8LaserCd -= dt;
+    if (l8LaserCd <= 0 && l8Lasers.length === 0) {
+      const eyeIdx = Math.random() < 0.5 ? 0 : 1;
+      const e = l8EyeWorldPos(eyeIdx);
+      const targetX = Math.random() * W;
+      const targetY = paddle
+        ? paddle.y + paddle.h * (0.2 + Math.random() * 0.6)
+        : H * (0.86 + Math.random() * 0.08);
+      const dur = 0.65 + Math.random() * 0.5; // ~0.65–1.15s
+      l8Lasers.push({
+        x0: e.x, y0: e.y,
+        x1: targetX, y1: targetY,
+        t: 0, dur,
+        w: 7 + Math.random() * 5,
+        eyeIdx,
+      });
+      l8LaserCd = 1.55 + Math.random() * 1.4; // ~1.5–3s
+      bumpCam(1.4);
+    }
+  }
+
+  function drawL8EyeLasers() {
+    if (!l8Lasers.length) return;
+    for (const L of l8Lasers) {
+      const u = L.t / Math.max(1e-6, L.dur);
+      const fade = u < 0.12 ? u / 0.12 : (u > 0.85 ? (1 - u) / 0.15 : 1);
+      const pulse = 0.75 + 0.25 * Math.sin(performance.now() * 0.04);
+      const a = fade * pulse;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
+      // Outer glow
+      ctx.strokeStyle = `rgba(255,40,50,${0.22 * a})`;
+      ctx.lineWidth = L.w * 3.2;
+      ctx.beginPath();
+      ctx.moveTo(L.x0, L.y0);
+      ctx.lineTo(L.x1, L.y1);
+      ctx.stroke();
+      // Mid
+      ctx.strokeStyle = `rgba(255,60,70,${0.55 * a})`;
+      ctx.lineWidth = L.w * 1.6;
+      ctx.beginPath();
+      ctx.moveTo(L.x0, L.y0);
+      ctx.lineTo(L.x1, L.y1);
+      ctx.stroke();
+      // Core
+      ctx.strokeStyle = `rgba(255,200,200,${0.95 * a})`;
+      ctx.lineWidth = Math.max(2, L.w * 0.45);
+      ctx.beginPath();
+      ctx.moveTo(L.x0, L.y0);
+      ctx.lineTo(L.x1, L.y1);
+      ctx.stroke();
+      // Eye bloom
+      ctx.fillStyle = `rgba(255,30,45,${0.55 * a})`;
+      ctx.beginPath();
+      ctx.arc(L.x0, L.y0, L.w * 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawL8EyeFlash() {
+    if (l8EyeFlashT <= 0) return;
+    const u = Math.max(0, Math.min(1, l8EyeFlashT)); // 1 → 0
+    // Pulse matching her red eyes
+    const pulse = 0.35 + 0.65 * Math.abs(Math.sin((1 - u) * Math.PI * 3.2));
+    const a = u * pulse * 0.55;
+    ctx.save();
+    ctx.fillStyle = `rgba(200, 12, 28, ${a})`;
+    ctx.fillRect(0, 0, W, H);
+    // Hot center vignette
+    const g = ctx.createRadialGradient(W * 0.45, H * 0.14, 10, W * 0.5, H * 0.2, Math.max(W, H) * 0.7);
+    g.addColorStop(0, `rgba(255,40,50,${0.55 * u * pulse})`);
+    g.addColorStop(0.35, `rgba(180,10,25,${0.25 * u})`);
+    g.addColorStop(1, 'rgba(80,0,10,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+
   function updateL8HandSpawns() {
     if (!level().queenBoss || l8Phase !== 'hands' || l8Intro) return;
     if (l8HandsSpawned >= 2 || l8SpawnBusy) return;
@@ -2136,7 +2581,12 @@
 
   /** Hands block/intercept ball; stay anchored to their screen edge. */
   function updateL8HandAI(dt) {
-    if (!launched || gameOver || won || outro || l8Intro) {
+    if (l8Phase !== 'hands' || l8Intro) {
+      structureDVX *= 0.9;
+      structureDVY *= 0.9;
+      return;
+    }
+    if (!launched || gameOver || won || outro) {
       structureDVX *= 0.9;
       structureDVY *= 0.9;
       return;
@@ -2302,7 +2752,7 @@
     const step = dt * 60;
     const debrisActive = !paused && !gameOver && !won && !outro && l8Phase !== 'idle';
     // Moderate spawn rate — rains during intro + hands (even if ball on paddle)
-    if ((l8Phase === 'hands' || l8Intro || l8Phase === 'intro') && debrisActive) {
+    if ((l8Phase === 'hands' || l8Phase === 'head' || l8Intro || l8Phase === 'intro') && debrisActive) {
       l8DebrisTimer -= dt;
       if (l8DebrisTimer <= 0) {
         spawnL8Debris();
@@ -2556,6 +3006,11 @@
       l8HandsSpawned = 0;
       l8HandSpawnAt = 0;
       l8Phase = 'intro';
+      l8EyeFlashT = 0;
+      l8HeadStartCount = 0;
+      l8Lasers = [];
+      l8LaserCd = 0;
+      l8LasersDone = false;
       hint.classList.add('show');
       hint.innerHTML = '<strong>La Reina…</strong><span>Una presencia colosal</span>';
       updateHud();
@@ -3924,7 +4379,11 @@
 
   function updateDodgeAI(dt) {
     if (level().queenBoss) {
-      if (structures.length && !l8Intro) eachStructure(() => updateL8HandAI(dt));
+      if (l8Phase === 'hands' && structures.length && !l8Intro) {
+        eachStructure(() => updateL8HandAI(dt));
+      } else if (l8Phase === 'head') {
+        syncL8HeadToQueen();
+      }
       return;
     }
     if (level().jump) {
@@ -4097,6 +4556,12 @@
     }
     if (level().queenBoss && l8Phase === 'hands') {
       updateL8HandSpawns();
+    }
+    if (level().queenBoss && l8EyeFlashT > 0) {
+      l8EyeFlashT = Math.max(0, l8EyeFlashT - dt);
+    }
+    if (level().queenBoss && l8Phase === 'head') {
+      updateL8EyeLasers(dt);
     }
     if (l6Transit) {
       updateBg(dt);
@@ -4863,7 +5328,7 @@
     let sx = 1, sy = 1;
 
     // L8 intro: slight zoom-in as we rise to the Queen's face
-    if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'hands')) {
+    if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'hands' || l8Phase === 'head')) {
       const z = 1 + (l8Intro ? l8CamY * 0.04 : 0.045);
       sx *= z; sy *= z;
       // Extra upward feel while rising (world slides down a touch)
@@ -4906,6 +5371,7 @@
     else if (!level().queenBoss) drawLooseBricks();
     drawParticles();
     if (level().queenBoss) drawL8Debris();
+    if (level().queenBoss) drawL8EyeLasers();
     drawBombs();
     drawLaserBeams();
     drawPaddle();
@@ -4939,6 +5405,7 @@
     ctx.restore();
 
     // Screen-space damage overlays (flash / cracks / death glitch)
+    if (level().queenBoss) drawL8EyeFlash();
     drawDamageOverlays();
   }
 
@@ -5405,7 +5872,7 @@
         crackIntensity,
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
-      showMenuHint('Partida guardada', 'Guarda progreso (nivel, dinero, vidas, mochila)', 2200);
+      showMenuHint('Partida guardada', 'Progreso: nivel, dinero, vidas, mochila', 2200);
     } catch (err) {
       console.warn('save failed', err);
       showMenuHint('No se pudo guardar', 'Revisa el almacenamiento del navegador', 2000);
@@ -5417,7 +5884,7 @@
     try {
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) {
-        showMenuHint('No hay partida guardada', 'Guarda progreso (nivel, dinero, vidas, mochila)', 2200);
+        showMenuHint('No hay partida guardada', 'Progreso: nivel, dinero, vidas, mochila', 2200);
         return;
       }
       data = JSON.parse(raw);
