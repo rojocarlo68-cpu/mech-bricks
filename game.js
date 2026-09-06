@@ -19,7 +19,8 @@
     { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
     { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', bgC: 'bg-level6c.jpg', waves: 3, paddleScale: 0.8846, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.0404, brickDamageMult: 1.2 },
     { id: 7, name: 'Nivel 7', mech: 'mech-level7-upper.png', mechLower: 'mech-level7-lower.png', bg: 'bg-level7.jpg', dualLayer: true, irregularBricks: true, mechScale: 1.24, paddleScale: 0.86, groundFrac: 0.88, dodge: true, ballSpeed: 1.05, brickDamageMult: 1.25 },
-    { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8428, groundFrac: 0.82, dodge: true, ballSpeed: 1.071, brickDamageMult: 1.3 },
+    // Levels ≥8: harder scale (~−2% paddle, +2% ball vs L7 cascade). Only L8 exists beyond 7 for now.
+    { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8259, groundFrac: 0.82, dodge: true, ballSpeed: 1.0924, brickDamageMult: 1.3 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -2273,8 +2274,9 @@
   function updateL8Debris(dt) {
     if (!level().queenBoss) return;
     const step = dt * 60;
-    // Moderate spawn rate — not overwhelming
-    if (!l8Intro && l8Phase === 'hands' && launched && !outro) {
+    const debrisActive = !paused && !gameOver && !won && !l8Intro && !outro;
+    // Moderate spawn rate — not overwhelming (also rains while ball waits on paddle)
+    if (!l8Intro && l8Phase === 'hands' && debrisActive) {
       l8DebrisTimer -= dt;
       if (l8DebrisTimer <= 0) {
         spawnL8Debris();
@@ -2289,9 +2291,10 @@
         l8DebrisTimer = 1.4 + Math.random() * 1.6;
       }
     }
-    // Debris passes through hand bricks (structure) — only ball collides with debris.
-    // Despawn at ground / bottom of screen; light dust while falling + puff on impact.
-    const floor = groundY > 0 ? groundY + 8 : H + 20;
+    // Debris passes through hand bricks (structure) — only ball + paddle collide.
+    // Despawn at playfield bottom near paddle (NOT Queen groundY mid-screen).
+    const floor = H - 4;
+    const padPad = 6; // widened paddle AABB
     for (let i = l8Debris.length - 1; i >= 0; i--) {
       const d = l8Debris[i];
       if (!d.alive) { l8Debris.splice(i, 1); continue; }
@@ -2308,19 +2311,16 @@
           spread: 0.35, up: 0.15, jitter: 3,
         });
       }
-      // Golpe a la paleta → 1/4 de vida (una vez por escombro)
+      // Golpe a la paleta → 1/4 de vida (una vez por escombro; OK while waiting to launch)
       if (
         !d.hitPaddle &&
         paddle &&
-        launched &&
-        !gameOver &&
-        !won &&
-        !outro &&
+        debrisActive &&
         d.vy > 0 &&
-        d.y + d.h >= paddle.y &&
-        d.y <= paddle.y + paddle.h &&
-        d.x + d.w >= paddle.x - 2 &&
-        d.x <= paddle.x + paddle.w + 2
+        d.y + d.h >= paddle.y - padPad &&
+        d.y <= paddle.y + paddle.h + padPad &&
+        d.x + d.w >= paddle.x - padPad &&
+        d.x <= paddle.x + paddle.w + padPad
       ) {
         d.hitPaddle = true;
         d.vy = -Math.abs(d.vy) * 0.35 - 0.8;
@@ -2334,7 +2334,7 @@
       const hitGround = d.y + d.h >= floor || d.y > H + 30;
       if (hitGround || d.x + d.w < -40 || d.x > W + 40) {
         if (hitGround) {
-          spawnDust(d.x + d.w * 0.5, Math.min(floor, H - 4), `rgb(${d.r},${d.g},${d.b})`, 7 + (Math.random() * 5) | 0, {
+          spawnDust(d.x + d.w * 0.5, floor, `rgb(${d.r},${d.g},${d.b})`, 7 + (Math.random() * 5) | 0, {
             spread: 0.9, up: 1.4, ground: true, hemisphere: true, jitter: 8,
           });
         }
@@ -3084,6 +3084,8 @@
   function loseQuarterLife() {
     if (shieldCharges > 0) {
       shieldCharges--;
+      triggerHurtFX(false); // show impact even when shield consumes the hit
+      updateHud();
       return;
     }
     lives = Math.max(0, +(lives - 0.25).toFixed(2));
@@ -5464,6 +5466,12 @@
   document.getElementById('btnResume').addEventListener('click', (e) => {
     e.stopPropagation(); closeAllMenus(); setPauseBtn(false); setShopBtn(false);
   });
+  const btnClosePause = document.getElementById('btnClosePause');
+  if (btnClosePause) {
+    btnClosePause.addEventListener('click', (e) => {
+      e.stopPropagation(); closeAllMenus(); setPauseBtn(false); setShopBtn(false);
+    });
+  }
   const btnShop = document.getElementById('btnShop');
   btnShop.addEventListener('pointerdown', () => setShopBtn(true));
   btnShop.addEventListener('pointerup', () => { /* keep on while shop open */ });

@@ -51,13 +51,14 @@
     .img-btn:active { transform: scale(.96); opacity: .95; }
     #pauseOverlay .img-btn img, #shopOverlay .img-btn img, #packOverlay .img-btn img { height: 56px; width: auto; margin: 0 auto; display: block; }
     .menu-btns .img-btn {
-      width: auto; align-self: stretch; background: rgba(255,255,255,.06) !important;
-      border: 1px solid rgba(255,255,255,.12); padding: 8px 10px !important; min-height: 64px !important;
+      width: auto; align-self: stretch; background: rgba(0,0,0,.32) !important;
+      border: 1px solid rgba(255, 150, 40, 0.28); padding: 8px 10px !important; min-height: 64px !important;
       display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+      border-radius: 8px;
     }
     .menu-btns .img-btn .btn-label {
       display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
-      color: #e8eef8; line-height: 1.2; opacity: 0.95;
+      color: #ffc070; line-height: 1.2; opacity: 0.95;
     }
     .menu-btns-row {
       display: flex; flex-direction: row; gap: 10px; width: 100%;
@@ -151,32 +152,75 @@
     }
     .overlay.show { display: flex; }
     .panel {
-      width: min(420px, 100%);
-      max-height: min(78vh, 640px);
+      width: min(460px, 100%);
+      max-height: min(82vh, 680px);
       overflow: auto;
-      background: #1a1f2b;
-      border: 1px solid rgba(255,255,255,.1);
-      border-radius: 16px;
-      padding: 18px 16px 16px;
-      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+      position: relative;
+      border: none;
+      border-radius: 0;
+      /* Industrial frame: dark translucent fill in center + ui-panel-frame.png */
+      background:
+        linear-gradient(180deg, rgba(10, 12, 14, 0.94), rgba(16, 14, 10, 0.92))
+          center / calc(100% - 88px) calc(100% - 88px) no-repeat,
+        url(ui-panel-frame.png) center / 100% 100% no-repeat;
+      padding: 52px 48px 44px;
+      box-shadow: 0 18px 48px rgba(0,0,0,.55);
+      color: #e8e6e0;
     }
-    .panel h2 { font-size: 20px; margin-bottom: 6px; }
-    .panel .sub { font-size: 13px; opacity: .7; margin-bottom: 14px; }
+    .panel h2 {
+      font-size: 22px;
+      margin-bottom: 6px;
+      color: #ff9a1a;
+      text-shadow: 0 0 10px rgba(255, 140, 20, 0.45), 0 1px 2px rgba(0,0,0,.85);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .panel .sub { font-size: 13px; opacity: .72; margin-bottom: 14px; color: #c8c2b4; }
     .menu-btns { display: flex; flex-direction: column; gap: 8px; }
     .menu-btns button { width: 100%; }
+    /* Continuar / Cerrar / Volver — metal + orange accents matching frame */
+    .panel button.nav-primary,
+    .panel #btnResume,
+    .panel #btnClosePause {
+      background: linear-gradient(180deg, #c45a12 0%, #8a3a08 55%, #5c2806 100%);
+      color: #fff4e6;
+      border: 1px solid rgba(255, 170, 60, 0.65);
+      border-radius: 8px;
+      box-shadow:
+        0 0 0 1px rgba(40, 28, 12, 0.8) inset,
+        0 2px 0 rgba(255, 200, 120, 0.18) inset,
+        0 4px 12px rgba(0,0,0,.4);
+      text-shadow: 0 1px 2px rgba(0,0,0,.7);
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+    .panel button.nav-secondary,
+    .panel #btnShopBack,
+    .panel #btnPackBack {
+      background: linear-gradient(180deg, rgba(42, 40, 34, 0.95), rgba(22, 20, 16, 0.98));
+      color: #ffb040;
+      border: 1.5px solid rgba(255, 150, 40, 0.7);
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(255, 140, 30, 0.12), inset 0 1px 0 rgba(255,255,255,.06);
+      text-shadow: 0 1px 2px rgba(0,0,0,.75);
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
     .shop-item, .pack-item {
       display: flex; align-items: center; gap: 10px;
-      padding: 10px; border-radius: 12px;
-      background: rgba(255,255,255,.05);
+      padding: 10px; border-radius: 10px;
+      background: rgba(0,0,0,.35);
+      border: 1px solid rgba(255, 160, 50, 0.18);
       margin-bottom: 8px;
     }
     .shop-item .icon, .pack-item .icon { font-size: 22px; width: 28px; text-align: center; }
     .shop-item .info, .pack-item .info { flex: 1; min-width: 0; }
-    .shop-item .name, .pack-item .name { font-weight: 650; font-size: 14px; }
+    .shop-item .name, .pack-item .name { font-weight: 650; font-size: 14px; color: #ffe0b0; }
     .shop-item .desc, .pack-item .desc { font-size: 12px; opacity: .7; }
     .shop-item .price { font-weight: 700; color: #b8f5c2; font-size: 13px; margin-right: 6px; }
     .shop-item button, .pack-item button { padding: 8px 12px; min-height: 36px; font-size: 13px; }
-    .back-row { margin-top: 10px; }
+    .back-row { margin-top: 12px; }
+    .back-row button { width: 100%; }
     #packSlots { font-size: 12px; opacity: .75; margin-bottom: 10px; }
     .shop-money, .pack-money {
       display: inline-block;
@@ -274,7 +318,7 @@
           <h2>Pausa</h2>
           <p class="sub">Partida en espera</p>
           <div class="menu-btns">
-            <button type="button" id="btnResume">Continuar</button>
+            <button type="button" class="nav-primary" id="btnResume">Continuar</button>
             <div class="menu-btns-row">
               <button type="button" class="img-btn" id="btnShop" aria-label="Tienda">
                 <img id="btnShopImg" src="btn-shop.png" alt="" />
@@ -295,6 +339,7 @@
                 <span class="btn-label">Cargar</span>
               </button>
             </div>
+            <button type="button" class="nav-primary" id="btnClosePause">Cerrar</button>
           </div>
         </div>
       </div>
@@ -305,7 +350,7 @@
           <p class="shop-money" id="shopMoney">$0</p>
           <p class="sub">Se guarda en la mochila (máx. 5)</p>
           <div id="shopList"></div>
-          <div class="back-row"><button type="button" class="secondary" id="btnShopBack">Volver</button></div>
+          <div class="back-row"><button type="button" class="nav-secondary" id="btnShopBack">Volver</button></div>
         </div>
       </div>
 
@@ -315,11 +360,11 @@
           <p class="pack-money" id="packMoney">$0</p>
           <p id="packSlots" class="sub">0 / 5 espacios</p>
           <div id="packList"></div>
-          <div class="back-row"><button type="button" class="secondary" id="btnPackBack">Volver</button></div>
+          <div class="back-row"><button type="button" class="nav-secondary" id="btnPackBack">Volver</button></div>
         </div>
       </div>
     </div>
   </div>
-  <script src="game.js?v=37"></script>
+  <script src="game.js?v=38"></script>
 </body>
 </html>
