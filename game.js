@@ -213,7 +213,7 @@
   let l8QueenUnderImg = null;
   let l8EyeFlashT = 0; // red eye flash countdown (seconds)
   let l8HeadStartCount = 0;
-  let l8HeadFrac = 0.24; // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
+  let l8HeadFrac = 0.132; // solo corona+cara (antes de hombros/pecho) // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
   let l8Lasers = []; // {x0,y0,x1,y1,t,dur,w}
   let l8LaserCd = 0;
   let l8LasersDone = false;
@@ -252,7 +252,8 @@
         r += imgData[i]; g += imgData[i + 1]; b += imgData[i + 2]; n++;
       }
     }
-    if (n < Math.max(2, cellSize * cellSize * 0.12)) return null;
+    const minPix = cellSize <= 1 ? 1 : Math.max(2, cellSize * cellSize * 0.12);
+    if (n < minPix) return null;
     return { r: (r / n) | 0, g: (g / n) | 0, b: (b / n) | 0 };
   }
 
@@ -1632,8 +1633,8 @@
   }
 
 
-  function mergeIrregularBricks() {
-    // Fusiona ~18% de semillas en ladrillos 2x2 / 2x1 / 1x2 / 3x2 (AABB opacos)
+  function mergeIrregularBricks(seedFrac) {
+    // Fusiona semillas en ladrillos 2x2 / 2x1 / 1x2 / 3x2 (AABB opacos) → tamaños distintos
     const shapes = [
       { cw: 2, ch: 2 },
       { cw: 2, ch: 1 },
@@ -1641,6 +1642,9 @@
       { cw: 3, ch: 2 },
       { cw: 2, ch: 3 },
       { cw: 3, ch: 1 },
+      { cw: 1, ch: 3 },
+      { cw: 4, ch: 2 },
+      { cw: 2, ch: 4 },
     ];
     const order = bricks.map((_, i) => i);
     for (let i = order.length - 1; i > 0; i--) {
@@ -1650,7 +1654,8 @@
     const claimed = new Uint8Array(cols * rows);
     const keep = new Array(bricks.length).fill(true);
     let mergeSeeds = 0;
-    const seedBudget = Math.max(1, (bricks.length * 0.18) | 0);
+    const frac = (seedFrac != null && seedFrac > 0) ? seedFrac : 0.18;
+    const seedBudget = Math.max(1, (bricks.length * frac) | 0);
 
     for (const bi of order) {
       if (mergeSeeds >= seedBudget) break;
@@ -2279,12 +2284,12 @@
       originY = oy;
       fitScale = fit;
 
-      // Cara: densísimo (≥7000) — celdas chicas; sin paneles irregulares
+      // Solo cabeza: densísimo (≥7000) con celdas chicas (1px si hace falta)
       const HEAD_MIN = Math.max(MIN_BRICKS, 7000);
       const HEAD_CAP = Math.max(MAX_BRICKS, 12000);
-      let localCell = 3;
+      let localCell = 2;
       let bestN = 0;
-      for (let c = 6; c >= 1; c--) {
+      for (let c = 4; c >= 1; c--) {
         const ccols = Math.ceil(imgW / c);
         const headRows = Math.ceil((imgH * headFrac) / c);
         let n = 0;
@@ -2299,10 +2304,9 @@
         }
         localCell = c;
         bestN = n;
-        // Prefer the coarsest cell that still hits ≥7000 (perf), else keep refining
         if (n >= HEAD_MIN) break;
       }
-      console.log('[l8-head] cell', localCell, 'estBricks', bestN, 'img', imgW, imgH);
+      console.log('[l8-head] cell', localCell, 'estBricks', bestN, 'frac', headFrac, 'img', imgW, imgH);
 
       const localCols = Math.ceil(imgW / localCell);
       const localRows = Math.ceil(imgH / localCell);
@@ -2362,15 +2366,14 @@
         }
       }
       groundY += 0.5;
-      // NO merge irregular en la cabeza: los paneles grandes deforman la cara.
-      // Ladrillos finos ≥7000 = silueta nítida.
+      // Tamaños distintos (2x1, 2x2, …) sin paneles voronoi enormes
+      mergeIrregularBricks(0.32);
       for (const br of bricks) {
-        if (br.l8u == null) {
-          br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
-          br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
-          br.l8uw = br.w / Math.max(1e-6, imgW * fitScale);
-          br.l8vh = br.h / Math.max(1e-6, imgH * fitScale);
-        }
+        // UV desde AABB del ladrillo (tras merge)
+        br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
+        br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
+        br.l8uw = br.w / Math.max(1e-6, imgW * fitScale);
+        br.l8vh = br.h / Math.max(1e-6, imgH * fitScale);
       }
 
       brickLayer = document.createElement('canvas');
