@@ -56,13 +56,17 @@
     } catch (_) {}
   })();
 
+  let bootMoneyApplied = false;
   function applyBootMoney(showHint) {
     if (bootMoney == null) return false;
-    score = bootMoney | 0;
+    if (!bootMoneyApplied) {
+      score = bootMoney | 0;
+      bootMoneyApplied = true;
+    }
     try { updateHud(); } catch (_) {}
     if (showHint && typeof hint !== 'undefined' && hint) {
       hint.classList.add('show');
-      hint.innerHTML = '<strong>Prueba</strong><span>$' + score.toLocaleString('en-US') + ' de inicio</span>';
+      hint.innerHTML = '<strong>Prueba</strong><span>$' + (bootMoney | 0).toLocaleString('en-US') + ' de inicio</span>';
       clearTimeout(window.__hintHide);
       window.__hintHide = setTimeout(() => {
         if (launched && !gameOver && !paused) hint.classList.remove('show');
@@ -446,7 +450,6 @@
   }
 
   function updateHud() {
-    if (bootMoney != null && (score | 0) < (bootMoney | 0)) score = bootMoney | 0;
     const unit = level().panels ? 'paneles' : 'ladrillos';
     structureCount = countAliveStructureBricks();
     countEl.textContent = `${level().name} · ${structureCount} ${unit}`;
@@ -5522,11 +5525,12 @@
       return;
     }
     buildLevel();
+    applyBootMoney(false);
   });
 
   window.addEventListener('resize', () => {
     clearTimeout(window.__rz);
-    window.__rz = setTimeout(() => buildLevel(), 150);
+    window.__rz = setTimeout(() => { buildLevel(); applyBootMoney(false); }, 150);
   });
 
   function loadBg() {
