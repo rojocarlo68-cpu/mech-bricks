@@ -28,23 +28,48 @@
   // ?level=2 para probar nivel 2 directo
   // ?level=8&phase=head — saltar a fase de cabeza (sin manos)
   let l8BootSkipToHead = false;
-  let bootMoney = null; // ?money=30000 para pruebas de tienda
+  let bootMoney = null; // ?money=30000 o ?m=30000
   (function bootLevelFromUrl() {
     try {
       const q = new URLSearchParams(location.search);
+      // también aceptar hash: #money=30000
+      try {
+        const h = (location.hash || '').replace(/^#/, '');
+        if (h) {
+          const hq = new URLSearchParams(h.includes('=') ? h : '');
+          for (const [k, v] of hq.entries()) {
+            if (!q.has(k)) q.set(k, v);
+          }
+        }
+      } catch (_) {}
       const n = parseInt(q.get('level') || q.get('n') || '1', 10);
       if (n >= 1 && n <= LEVELS.length) levelIndex = n - 1;
       const phase = (q.get('phase') || q.get('skip') || '').toLowerCase();
       if (phase === 'head' || phase === 'cabeza' || phase === 'after-hands' || phase === 'post-manos') {
         l8BootSkipToHead = true;
       }
-      const mRaw = q.get('money') || q.get('cash') || q.get('dinero');
-      if (mRaw != null && mRaw !== '') {
-        const m = parseInt(String(mRaw).replace(/[$,\s]/g, ''), 10);
+      const mRaw = q.get('money') || q.get('m') || q.get('cash') || q.get('dinero');
+      if (mRaw != null && String(mRaw).trim() !== '') {
+        const m = parseInt(String(mRaw).replace(/[^0-9]/g, ''), 10);
         if (Number.isFinite(m) && m >= 0) bootMoney = m;
       }
     } catch (_) {}
   })();
+
+  function applyBootMoney(showHint) {
+    if (bootMoney == null) return false;
+    score = bootMoney | 0;
+    try { updateHud(); } catch (_) {}
+    if (showHint && typeof hint !== 'undefined' && hint) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Prueba</strong><span>$' + score.toLocaleString('en-US') + ' de inicio</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => {
+        if (launched && !gameOver && !paused) hint.classList.remove('show');
+      }, 2200);
+    }
+    return true;
+  }
 
   const SHOP = [
     { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 2080 },
@@ -82,7 +107,7 @@
   let ballStallT = 0;
   let ballLastAng = -Math.PI / 2;
   let score = 0, lives = START_LIVES, aliveCount = 0;
-  if (bootMoney != null) score = bootMoney;
+  if (bootMoney != null) score = bootMoney | 0;
   let pointerX = null;
   let lastTs = 0;
   let particles = [];
@@ -421,11 +446,12 @@
   }
 
   function updateHud() {
+    if (bootMoney != null && (score | 0) < (bootMoney | 0)) score = bootMoney | 0;
     const unit = level().panels ? 'paneles' : 'ladrillos';
     structureCount = countAliveStructureBricks();
     countEl.textContent = `${level().name} · ${structureCount} ${unit}`;
     const moneyTxt = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
-    scoreEl.textContent = moneyTxt;
+    if (scoreEl) scoreEl.textContent = moneyTxt;
     const shopMoney = document.getElementById('shopMoney');
     const packMoney = document.getElementById('packMoney');
     if (shopMoney) shopMoney.textContent = moneyTxt;
@@ -6077,6 +6103,7 @@
     try {
       await Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts(), loadBallSkin()]);
       buildLevel();
+      applyBootMoney(true);
       loading.classList.add('hide');
       requestAnimationFrame(frame);
     } catch (err) {
