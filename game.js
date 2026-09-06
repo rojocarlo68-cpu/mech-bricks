@@ -2842,6 +2842,8 @@
     let landed = 0;
     let landX = 0;
     const flying = !!(level().fly);
+    // L6/L7: caen y desaparecen al suelo (sin amontonar) para aliviar carga
+    const despawnAtGround = level().id === 6 || level().id === 7;
     for (const br of bricks) {
       if (!br.alive || !br.falling || br.settled) continue;
       // En niveles aéreos: gravedad suave + deriva, sin amontonar en el suelo
@@ -2856,6 +2858,26 @@
           br.alive = false;
           br.falling = false;
           drawBrickToLayer(br);
+        }
+        continue;
+      }
+
+      if (despawnAtGround) {
+        // Solo suelo: al tocar groundY se esfuman (sin pilas / sin O(n²))
+        if (br.y + br.h >= groundY || br.y > H) {
+          const x = br.x + br.w / 2;
+          br.alive = false;
+          br.falling = false;
+          br.settled = false;
+          drawBrickToLayer(br);
+          landed++;
+          landX += x;
+          // polvo ligero ocasional (no por cada ladrillo)
+          if (landed <= 4 || Math.random() < 0.08) {
+            spawnDust(x, groundY - 4, 'rgb(120,100,80)', 6, {
+              ground: true, hemisphere: true, spread: 1.2, up: 1.2, jitter: 12,
+            });
+          }
         }
         continue;
       }
@@ -2897,13 +2919,15 @@
     }
     // Nube grande si caen muchos a la vez
     if (landed >= 12) {
-      spawnGroundCloud(landX / landed, 1.6 + Math.min(2.5, landed / 40));
+      const cloudK = despawnAtGround ? 0.85 : 1.6 + Math.min(2.5, landed / 40);
+      spawnGroundCloud(landX / landed, cloudK);
       // varias bocanadas a lo largo del suelo
-      for (let i = 0; i < 5; i++) {
-        spawnGroundCloud(originX + Math.random() * (W * 0.6) + W * 0.2, 1.1);
+      const puffs = despawnAtGround ? 2 : 5;
+      for (let i = 0; i < puffs; i++) {
+        spawnGroundCloud(originX + Math.random() * (W * 0.6) + W * 0.2, despawnAtGround ? 0.7 : 1.1);
       }
     } else if (landed >= 3) {
-      spawnGroundCloud(landX / landed, 1.0);
+      spawnGroundCloud(landX / landed, despawnAtGround ? 0.7 : 1.0);
     }
   }
 
