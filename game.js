@@ -19,7 +19,7 @@
     { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
     { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', bgC: 'bg-level6c.jpg', waves: 3, paddleScale: 0.8846, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.0404, brickDamageMult: 1.2 },
     { id: 7, name: 'Nivel 7', mech: 'mech-level7-upper.png', mechLower: 'mech-level7-lower.png', bg: 'bg-level7.jpg', dualLayer: true, irregularBricks: true, mechScale: 1.24, paddleScale: 0.86, groundFrac: 0.88, dodge: true, ballSpeed: 1.05, brickDamageMult: 1.25 },
-    { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8428, groundFrac: 0.90, dodge: true, ballSpeed: 1.071, brickDamageMult: 1.3 },
+    { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8428, groundFrac: 0.82, dodge: true, ballSpeed: 1.071, brickDamageMult: 1.3 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -165,6 +165,8 @@
   let l8HandSpawnAt = 0; // performance.now() when left hand spawned; right at +5s
   let l8Phase = 'idle'; // idle | intro | hands
   let l8SpawnBusy = false;
+  let l8Debris = [];
+  let l8DebrisTimer = 0;
 
   function size() {
     return {
@@ -1982,32 +1984,37 @@
     l8HandSpawnAt = 0;
     l8Phase = 'idle';
     l8SpawnBusy = false;
+    l8Debris = [];
+    l8DebrisTimer = 0.6 + Math.random() * 0.8;
   }
 
   function l8EaseInOut(u) {
     return u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
   }
 
-  /** Queen draw transform: scale so face+chest fills viewport when cam settled. */
+  /** Queen draw transform: scale so face+chest fills viewport when cam settled.
+   *  Feet stay planted on groundY (rooftop floor) at camY=0; pan rises to face. */
   function l8QueenDrawParams() {
     const img = l8QueenImg;
     if (!img || !img.naturalWidth) return null;
     const iw = img.naturalWidth, ih = img.naturalHeight;
     // Top ~38% of body ≈ face + chest; scale that band to viewport height
     const faceFrac = 0.38;
+    const footFrac = 0.984; // opaque heel/toe near bottom of queen art
     const scale = (H / (ih * faceFrac)) * 1.08;
     const dw = iw * scale;
     const dh = ih * scale;
     const dx = (W - dw) / 2;
-    // camY 0 → feet framed; camY 1 → face+chest framed
-    const dyFeet = H - dh + H * 0.08;
-    const dyFace = -dh * 0.015;
+    const gy = groundY > 0 ? groundY : H * (level().groundFrac != null ? level().groundFrac : 0.82);
+    // camY 0 → feet on rooftop ground plane; camY 1 → face+chest framed
+    const dyFeet = gy - footFrac * dh;
+    const dyFace = -dh * 0.02;
     const dy = dyFeet + (dyFace - dyFeet) * l8CamY;
-    // slight idle parallax after intro
+    // slight idle parallax after intro (keep feet feel planted — mostly X)
     let px = 0, py = 0;
     if (!l8Intro && l8Phase === 'hands') {
       px = Math.sin(bgT * 0.35) * 4;
-      py = Math.cos(bgT * 0.28) * 3;
+      py = Math.cos(bgT * 0.28) * 1.5;
     }
     return { dx: dx + px, dy: dy + py, dw, dh };
   }
@@ -2064,20 +2071,20 @@
       const fit = Math.min(availW / imgW, availH / imgH) * mechScale;
       const ox = (W - imgW * fit) / 2;
       const unusedH = availH - imgH * fit;
-      // Hands hang from upper third
-      const oy = pad + 4 + Math.max(0, unusedH * 0.12);
+      // Horizontal hands: band sits in upper third of playfield
+      const oy = pad + 4 + Math.max(0, unusedH * 0.10);
       fillBricksFromImage(fit, ox, oy);
 
       const mechW = imgW * fitScale;
       const mechH = imgH * fitScale;
-      // Anchor: forearm/wrist near side edge — ~38% of width off-screen
+      // Anchor: forearm stump toward outer edge — ~42% of width off-screen
       if (side === 'left') {
-        structureDX = -originX - mechW * 0.38;
+        structureDX = -originX - mechW * 0.42;
       } else {
-        structureDX = (W + mechW * 0.38) - originX - mechW;
+        structureDX = (W + mechW * 0.42) - originX - mechW;
       }
       // Start slightly higher then settle
-      structureDY = -Math.min(80, mechH * 0.08);
+      structureDY = -Math.min(60, mechH * 0.06);
       structureDVX = 0;
       structureDVY = 0;
       structureAngle = 0;
@@ -2223,6 +2230,125 @@
     applyStructureOffset();
   }
 
+  function spawnL8Debris() {
+    if (!level().queenBoss || won || gameOver) return;
+    if (l8Debris.length >= 10) return;
+    const w = 10 + Math.random() * 22;
+    const h = 8 + Math.random() * 18;
+    const x = Math.random() * (W - w);
+    const gray = 70 + (Math.random() * 70) | 0;
+    const brown = (Math.random() * 35) | 0;
+    l8Debris.push({
+      x,
+      y: -h - Math.random() * 40,
+      w,
+      h,
+      vx: (Math.random() - 0.5) * 0.7,
+      vy: 0.4 + Math.random() * 0.9,
+      rot: Math.random() * Math.PI * 2,
+      vr: (Math.random() - 0.5) * 0.08,
+      r: gray,
+      g: gray - 8 + brown,
+      b: gray - 18 + (brown * 0.5) | 0,
+      alive: true,
+    });
+  }
+
+  function updateL8Debris(dt) {
+    if (!level().queenBoss) return;
+    const step = dt * 60;
+    // Moderate spawn rate — not overwhelming
+    if (!l8Intro && l8Phase === 'hands' && launched && !outro) {
+      l8DebrisTimer -= dt;
+      if (l8DebrisTimer <= 0) {
+        spawnL8Debris();
+        if (Math.random() < 0.28) spawnL8Debris();
+        l8DebrisTimer = 0.85 + Math.random() * 1.35;
+      }
+    } else if (l8Intro) {
+      // Light ambient rubble during intro
+      l8DebrisTimer -= dt;
+      if (l8DebrisTimer <= 0 && l8Debris.length < 4) {
+        spawnL8Debris();
+        l8DebrisTimer = 1.4 + Math.random() * 1.6;
+      }
+    }
+    const floor = groundY > 0 ? groundY + 8 : H + 20;
+    for (let i = l8Debris.length - 1; i >= 0; i--) {
+      const d = l8Debris[i];
+      if (!d.alive) { l8Debris.splice(i, 1); continue; }
+      d.vy += 0.085 * step; // gravity
+      d.vx *= 0.999;
+      d.x += d.vx * step;
+      d.y += d.vy * step;
+      d.rot += d.vr * step;
+      if (d.y + d.h >= floor || d.y > H + 30 || d.x + d.w < -40 || d.x > W + 40) {
+        l8Debris.splice(i, 1);
+      }
+    }
+  }
+
+  function collideBallWithL8Debris() {
+    if (!level().queenBoss || !ball || !l8Debris.length) return;
+    for (const d of l8Debris) {
+      if (!d.alive) continue;
+      if (!collideCircleAABB(ball.x, ball.y, ball.r, d)) continue;
+      const flags = bounceFlagsForHit(ball.x, ball.y, ball.r, d);
+      // Separate ball out of AABB
+      const nx = Math.max(d.x, Math.min(ball.x, d.x + d.w));
+      const ny = Math.max(d.y, Math.min(ball.y, d.y + d.h));
+      let dx = ball.x - nx, dy = ball.y - ny;
+      const dist = Math.hypot(dx, dy) || 0.001;
+      const push = ball.r - dist + 0.5;
+      if (push > 0 && dist < ball.r) {
+        ball.x += (dx / dist) * push;
+        ball.y += (dy / dist) * push;
+      } else if (flags.bounceY) {
+        if (ball.vy > 0) ball.y = d.y - ball.r - 0.5;
+        else ball.y = d.y + d.h + ball.r + 0.5;
+      } else if (flags.bounceX) {
+        if (ball.vx > 0) ball.x = d.x - ball.r - 0.5;
+        else ball.x = d.x + d.w + ball.r + 0.5;
+      }
+      if (flags.bounceX) {
+        ball.vx = -ball.vx * 0.98;
+        d.vx += (ball.vx > 0 ? 1 : -1) * 0.35;
+      }
+      if (flags.bounceY) {
+        ball.vy = -ball.vy * 0.98;
+        d.vy += ball.vy * 0.15;
+      }
+      // Keep speed floor
+      const sp = Math.hypot(ball.vx, ball.vy);
+      const minSp = Math.max(2.8, (ball.speed || 4) * 0.72);
+      if (sp < minSp && sp > 0.01) {
+        ball.vx = (ball.vx / sp) * minSp;
+        ball.vy = (ball.vy / sp) * minSp;
+      }
+      d.vr += (Math.random() - 0.5) * 0.12;
+      bumpCam(1.1);
+    }
+  }
+
+  function drawL8Debris() {
+    if (!level().queenBoss || !l8Debris.length) return;
+    for (const d of l8Debris) {
+      if (!d.alive) continue;
+      ctx.save();
+      ctx.translate(d.x + d.w / 2, d.y + d.h / 2);
+      ctx.rotate(d.rot);
+      ctx.fillStyle = `rgb(${d.r},${d.g},${d.b})`;
+      ctx.globalAlpha = 0.88;
+      ctx.fillRect(-d.w / 2, -d.h / 2, d.w, d.h);
+      // small crack highlight
+      ctx.fillStyle = `rgba(40,32,28,0.45)`;
+      ctx.fillRect(-d.w / 2, -d.h / 2, d.w * 0.35, d.h);
+      ctx.fillStyle = `rgba(160,140,120,0.25)`;
+      ctx.fillRect(d.w * 0.1, -d.h / 2, d.w * 0.25, d.h * 0.4);
+      ctx.restore();
+    }
+  }
+
   function buildLevel() {
     resizeCanvas();
     clearL6Timers();
@@ -2275,10 +2401,11 @@
 
     if (level().queenBoss) {
       // Queen is backdrop only — no bricks yet; hands spawn after intro
-      cols = 1; rows = 1; cell = 8; cellScreen = 8; brickPx = 8;
+      cols = 1; rows = 1; cell = 8; cellScreen = 8; brickPx = 5;
       originX = 0; originY = 0; fitScale = 1;
       minIy = 0; maxIy = 0;
-      groundY = H * (level().groundFrac || 0.90);
+      // Screen ground line near lower playfield; bg groundFrac aligns rooftop floor
+      groundY = H * 0.88;
       grid = new Int32Array(1); grid[0] = -1;
       brickLayer = makeBrickLayerCanvas();
       structureCount = 0;
@@ -2290,7 +2417,7 @@
       playerBomb = null;
       playerBombArmed = false;
       setBombButton(false);
-      bombTimer = 2.5;
+      bombTimer = 9999; // no enemy bombs on L8
       lives = START_LIVES;
       gameOver = false;
       won = false;
@@ -2309,6 +2436,8 @@
           a: 0.08 + Math.random() * 0.16,
         });
       }
+      l8Debris = [];
+      l8DebrisTimer = 0.8 + Math.random() * 0.7;
       launched = false;
       clearLaserCannons();
       basePaddleW = Math.min(168, W * 0.42) * (level().paddleScale || 1);
@@ -2318,7 +2447,8 @@
       paddleTrail = [];
       bigPaddleUntil = 0;
       ballAirTrail = [];
-      const diameter = Math.max(brickPx * 3.92, 12);
+      // Normal ball size (do NOT tie to hand brickPx / placeholder)
+      const diameter = Math.max(5 * 3.92, 12);
       baseBallR = diameter / 2;
       const r = baseBallR * ballRadiusMult();
       ball = {
@@ -3015,6 +3145,7 @@
 
   function spawnBomb() {
     if (gameOver || won || !launched || l6Transit || l8Intro) return;
+    if (level().queenBoss) return; // Queen / hands: no bombs
     const candidates = [];
     const gather = () => {
       for (const br of bricks) {
@@ -3860,6 +3991,7 @@
     if (level().queenBoss && (l8Intro || l8Phase === 'intro')) {
       updateBg(dt);
       updateL8Intro(dt);
+      updateL8Debris(dt);
       // paddle still tracks
       if (pointerX != null && paddle) {
         paddle.x = pointerX - paddle.w / 2;
@@ -3999,6 +4131,7 @@
     updateFalling(dt);
 
     if (!launched) {
+      if (level().queenBoss) updateL8Debris(dt);
       stickBallToPaddle();
       updateBallAirTrail(dt);
       return;
@@ -4008,15 +4141,20 @@
       return;
     }
 
-    bombTimer -= dt;
-    if (bombTimer <= 0) {
-      spawnBomb();
-      const every = (l6Phase === 'chess') ? BOMB_EVERY * 0.5 : BOMB_EVERY;
-      const jitter = (l6Phase === 'chess') ? 0.9 : 1.8;
-      bombTimer = every + Math.random() * jitter;
+    if (!level().queenBoss) {
+      bombTimer -= dt;
+      if (bombTimer <= 0) {
+        spawnBomb();
+        const every = (l6Phase === 'chess') ? BOMB_EVERY * 0.5 : BOMB_EVERY;
+        const jitter = (l6Phase === 'chess') ? 0.9 : 1.8;
+        bombTimer = every + Math.random() * jitter;
+      }
+      updateBombs(dt);
+      updatePlayerBomb(dt);
+    } else {
+      bombs = [];
+      updateL8Debris(dt);
     }
-    updateBombs(dt);
-    updatePlayerBomb(dt);
 
     const steps = 3;
     for (let s = 0; s < steps; s++) {
@@ -4047,6 +4185,7 @@
       }
 
       collideBricksWithBall();
+      if (level().queenBoss) collideBallWithL8Debris();
 
       if (ball.y - ball.r > H + 4) {
         loseLife();
@@ -4476,21 +4615,27 @@
     }
     if (level().queenBoss) {
       const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
-      const scale = Math.max(W / iw, H / ih) * 1.05;
+      // Align cracked rooftop floor (groundFrac) with queen feet / groundY
+      const groundFrac = level().groundFrac != null ? level().groundFrac : 0.82;
+      const gy = groundY > 0 ? groundY : H * 0.88;
+      const needH = Math.max(H * 1.25, (gy + H * 0.35) / groundFrac);
+      const scale = Math.max(W / iw, needH / ih) * 1.12;
       const dw = iw * scale, dh = ih * scale;
-      const dx = -(dw - W) * 0.5;
-      const dy = -(dh - H) * 0.5 + Math.sin(bgT * 0.04) * 3;
+      const drift = Math.sin(bgT * 0.04) * Math.min(18, (dw - W) * 0.06);
+      const dx = -(dw - W) * 0.5 + drift;
+      // Keep rooftop plane under feet as camera pans (bg locked to groundY)
+      const dy = gy - groundFrac * dh;
       ctx.drawImage(bgImg, dx, dy, dw, dh);
-      const grd = ctx.createRadialGradient(W * 0.5, H * 0.28, 20, W * 0.5, H * 0.4, H * 0.75);
-      grd.addColorStop(0, 'rgba(40,10,30,0.05)');
-      grd.addColorStop(0.55, 'rgba(6,4,14,0.35)');
-      grd.addColorStop(1, 'rgba(2,1,6,0.72)');
+      const grd = ctx.createRadialGradient(W * 0.5, H * 0.22, 20, W * 0.5, H * 0.45, H * 0.8);
+      grd.addColorStop(0, 'rgba(60,25,10,0.05)');
+      grd.addColorStop(0.5, 'rgba(10,6,14,0.28)');
+      grd.addColorStop(1, 'rgba(2,1,6,0.62)');
       ctx.fillStyle = grd;
       ctx.fillRect(0, 0, W, H);
       for (const p of bgDust) {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(180, 120, 255, ${p.a * 0.7})`;
+        ctx.fillStyle = `rgba(220, 160, 90, ${p.a * 0.55})`;
         ctx.fill();
       }
       return;
@@ -4665,6 +4810,7 @@
     if (structures.length) eachStructure(() => drawLooseBricks());
     else if (!level().queenBoss) drawLooseBricks();
     drawParticles();
+    if (level().queenBoss) drawL8Debris();
     drawBombs();
     drawLaserBeams();
     drawPaddle();
