@@ -28,6 +28,7 @@
   // ?level=2 para probar nivel 2 directo
   // ?level=8&phase=head — saltar a fase de cabeza (sin manos)
   let l8BootSkipToHead = false;
+  let bootMoney = null; // ?money=30000 para pruebas de tienda
   (function bootLevelFromUrl() {
     try {
       const q = new URLSearchParams(location.search);
@@ -36,6 +37,11 @@
       const phase = (q.get('phase') || q.get('skip') || '').toLowerCase();
       if (phase === 'head' || phase === 'cabeza' || phase === 'after-hands' || phase === 'post-manos') {
         l8BootSkipToHead = true;
+      }
+      const mRaw = q.get('money') || q.get('cash') || q.get('dinero');
+      if (mRaw != null && mRaw !== '') {
+        const m = parseInt(String(mRaw).replace(/[$,\s]/g, ''), 10);
+        if (Number.isFinite(m) && m >= 0) bootMoney = m;
       }
     } catch (_) {}
   })();
@@ -76,6 +82,7 @@
   let ballStallT = 0;
   let ballLastAng = -Math.PI / 2;
   let score = 0, lives = START_LIVES, aliveCount = 0;
+  if (bootMoney != null) score = bootMoney;
   let pointerX = null;
   let lastTs = 0;
   let particles = [];
