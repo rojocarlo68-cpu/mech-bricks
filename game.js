@@ -19,6 +19,7 @@
     { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
     { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', bgC: 'bg-level6c.jpg', waves: 3, paddleScale: 0.8846, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.0404, brickDamageMult: 1.2 },
     { id: 7, name: 'Nivel 7', mech: 'mech-level7-upper.png', mechLower: 'mech-level7-lower.png', bg: 'bg-level7.jpg', dualLayer: true, irregularBricks: true, mechScale: 1.24, paddleScale: 0.86, groundFrac: 0.88, dodge: true, ballSpeed: 1.05, brickDamageMult: 1.25 },
+    { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8428, groundFrac: 0.90, dodge: true, ballSpeed: 1.071, brickDamageMult: 1.3 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -33,13 +34,13 @@
   })();
 
   const SHOP = [
-    { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 1080 },
-    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · 10s de duración', icon: '🔫', price: 4120 },
-    { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 1100 },
-    { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 1090 },
-    { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 1110 },
-    { id: 'ballskin', name: 'Bola grabada', desc: 'Skin de bola · dureza +10%', icon: '🪩', price: 26799, minLevel: 3, img: 'ball-skin.png', ballPower: 1.1 },
-    { id: 'ballsilbadora', name: 'La silbadora', desc: 'Skin · dureza +20% · rastro de aire', icon: '💨', price: 35699, minLevel: 5, img: 'ball-silbadora.png', ballPower: 1.2 },
+    { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 2080 },
+    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · 10s de duración', icon: '🔫', price: 5120 },
+    { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 2100 },
+    { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 2090 },
+    { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 2110 },
+    { id: 'ballskin', name: 'Bola grabada', desc: 'Skin de bola · dureza +10%', icon: '🪩', price: 27799, minLevel: 3, img: 'ball-skin.png', ballPower: 1.1 },
+    { id: 'ballsilbadora', name: 'La silbadora', desc: 'Skin · dureza +20% · rastro de aire', icon: '💨', price: 36699, minLevel: 5, img: 'ball-silbadora.png', ballPower: 1.2 },
   ];
   const PACK_MAX = 5;
   const MAX_BRICKS = 12000;
@@ -153,6 +154,17 @@
   let l6RookOrder = []; // permutation of living rook indices for wall slots
   let l6ChessStarted = false;
   let l6ChessSpawned = 0;
+
+  // Level 8 — Queen boss + dual hands
+  let l8Intro = false;
+  let l8IntroT = 0;
+  const L8_INTRO_DUR = 4.2;
+  let l8CamY = 0; // 0 = feet, 1 = face+chest
+  let l8QueenImg = null;
+  let l8HandsSpawned = 0;
+  let l8HandSpawnAt = 0; // performance.now() when left hand spawned; right at +5s
+  let l8Phase = 'idle'; // idle | intro | hands
+  let l8SpawnBusy = false;
 
   function size() {
     return {
@@ -275,6 +287,20 @@
   }
 
   function loadImage() {
+    if (level().queenBoss) {
+      imgDataLower = null;
+      imgDataUpper = null;
+      gridLower = null;
+      gridUpper = null;
+      brickLayerLower = null;
+      brickLayerUpper = null;
+      // Queen is pure backdrop; brick imgData filled when hands spawn
+      imgData = new Uint8ClampedArray(4);
+      imgW = 1; imgH = 1;
+      return loadImg(level().queen || 'mech-level8-queen.png').then((img) => {
+        l8QueenImg = img;
+      });
+    }
     if (level().dualLayer && level().mechLower) {
       return loadDualMech(level().mechLower, level().mech);
     }
@@ -738,6 +764,7 @@
 
   function startSlowMoOutro() {
     if (outro || won || gameOver || l6Transit) return;
+    if (level().queenBoss && (l8Intro || l8HandsSpawned < 2)) return;
     outro = 'slowmo';
     outroT = 0;
     bombs = [];
@@ -953,6 +980,8 @@
 
   function maybeWin() {
     if (won || gameOver || outro === 'done' || l6Transit) return;
+    // L8: no win during intro / before both hands have spawned
+    if (level().queenBoss && (l8Intro || l8Phase !== 'hands' || l8HandsSpawned < 2)) return;
     refreshTotalStructureCount();
     const live = countAliveStructureBricks();
     structureCount = live;
@@ -1944,6 +1973,256 @@
     };
   }
 
+
+  function resetL8State() {
+    l8Intro = false;
+    l8IntroT = 0;
+    l8CamY = 0;
+    l8HandsSpawned = 0;
+    l8HandSpawnAt = 0;
+    l8Phase = 'idle';
+    l8SpawnBusy = false;
+  }
+
+  function l8EaseInOut(u) {
+    return u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+  }
+
+  /** Queen draw transform: scale so face+chest fills viewport when cam settled. */
+  function l8QueenDrawParams() {
+    const img = l8QueenImg;
+    if (!img || !img.naturalWidth) return null;
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    // Top ~38% of body ≈ face + chest; scale that band to viewport height
+    const faceFrac = 0.38;
+    const scale = (H / (ih * faceFrac)) * 1.08;
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = (W - dw) / 2;
+    // camY 0 → feet framed; camY 1 → face+chest framed
+    const dyFeet = H - dh + H * 0.08;
+    const dyFace = -dh * 0.015;
+    const dy = dyFeet + (dyFace - dyFeet) * l8CamY;
+    // slight idle parallax after intro
+    let px = 0, py = 0;
+    if (!l8Intro && l8Phase === 'hands') {
+      px = Math.sin(bgT * 0.35) * 4;
+      py = Math.cos(bgT * 0.28) * 3;
+    }
+    return { dx: dx + px, dy: dy + py, dw, dh };
+  }
+
+  function drawL8Queen() {
+    const q = l8QueenDrawParams();
+    if (!q || !l8QueenImg) return;
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.drawImage(l8QueenImg, q.dx, q.dy, q.dw, q.dh);
+    // Soft darkness so hands/paddle read on top
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(4,2,10,0.15)');
+    g.addColorStop(0.55, 'rgba(4,2,10,0.05)');
+    g.addColorStop(1, 'rgba(4,2,10,0.35)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  function updateL8Intro(dt) {
+    if (!l8Intro) return;
+    l8IntroT += dt;
+    const u = Math.min(1, l8IntroT / L8_INTRO_DUR);
+    l8CamY = l8EaseInOut(u);
+    launched = false;
+    if (ball && paddle) stickBallToPaddle();
+    if (u < 1) return;
+    // Intro settled → spawn left hand, unlock play
+    l8Intro = false;
+    l8CamY = 1;
+    l8Phase = 'hands';
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Sus manos!</strong><span>Destruye ambas · bloquean la bola</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (launched && !gameOver && !paused) hint.classList.remove('show');
+    }, 2600);
+    Promise.resolve(spawnL8Hand('left')).catch((e) => console.warn('l8 hand L', e));
+  }
+
+  async function spawnL8Hand(side) {
+    if (!level().queenBoss || won || gameOver) return null;
+    if (l8SpawnBusy) return null;
+    l8SpawnBusy = true;
+    try {
+      const src = side === 'left' ? (level().handL || 'mech-level8-hand-l.png') : (level().handR || 'mech-level8-hand-r.png');
+      await loadMechSrc(src);
+      const pad = 12;
+      const paddleSpace = 92;
+      const availW = W - pad * 2;
+      const availH = H - pad * 2 - paddleSpace;
+      const mechScale = level().mechScale != null ? level().mechScale : 0.58;
+      const fit = Math.min(availW / imgW, availH / imgH) * mechScale;
+      const ox = (W - imgW * fit) / 2;
+      const unusedH = availH - imgH * fit;
+      // Hands hang from upper third
+      const oy = pad + 4 + Math.max(0, unusedH * 0.12);
+      fillBricksFromImage(fit, ox, oy);
+
+      const mechW = imgW * fitScale;
+      const mechH = imgH * fitScale;
+      // Anchor: forearm/wrist near side edge — ~38% of width off-screen
+      if (side === 'left') {
+        structureDX = -originX - mechW * 0.38;
+      } else {
+        structureDX = (W + mechW * 0.38) - originX - mechW;
+      }
+      // Start slightly higher then settle
+      structureDY = -Math.min(80, mechH * 0.08);
+      structureDVX = 0;
+      structureDVY = 0;
+      structureAngle = 0;
+      structureAV = 0;
+      jumpPhase = 'ground';
+      jumpCooldown = 99;
+      jumpTargetDX = structureDX;
+      applyStructureOffset();
+
+      const S = captureStructure();
+      S.l8Side = side;
+      S.homeDX = structureDX;
+      S.l8AnchorDX = structureDX;
+      S.l8MinInward = side === 'left' ? structureDX : structureDX - mechW * 0.22;
+      S.l8MaxInward = side === 'left' ? structureDX + mechW * 0.22 : structureDX;
+      // vertical freedom
+      S.l8MinDY = -mechH * 0.25;
+      S.l8MaxDY = Math.max(40, H * 0.42 - (originY + mechH * 0.55));
+
+      structures.push(S);
+      l8HandsSpawned = structures.length;
+      if (side === 'left') {
+        l8HandSpawnAt = performance.now();
+      }
+      refreshTotalStructureCount();
+      aliveCount = 0;
+      for (const st of structures) aliveCount += st.bricks.length;
+      applyStructure(structures[0]);
+      updateHud();
+      bumpCam(2.8);
+      return S;
+    } finally {
+      l8SpawnBusy = false;
+    }
+  }
+
+  function updateL8HandSpawns() {
+    if (!level().queenBoss || l8Phase !== 'hands' || l8Intro) return;
+    if (l8HandsSpawned >= 2 || l8SpawnBusy) return;
+    if (l8HandsSpawned === 1 && l8HandSpawnAt && performance.now() - l8HandSpawnAt >= 5000) {
+      Promise.resolve(spawnL8Hand('right')).catch((e) => console.warn('l8 hand R', e));
+    }
+  }
+
+  /** Hands block/intercept ball; stay anchored to their screen edge. */
+  function updateL8HandAI(dt) {
+    if (!launched || gameOver || won || outro || l8Intro) {
+      structureDVX *= 0.9;
+      structureDVY *= 0.9;
+      return;
+    }
+    const me = currentL6Structure();
+    const side = (me && me.l8Side) || (structureDX < 0 ? 'left' : 'right');
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, n = 0;
+    for (const br of bricks) {
+      if (!br.alive || br.falling || br.settled) continue;
+      minX = Math.min(minX, br.x); maxX = Math.max(maxX, br.x + br.w);
+      minY = Math.min(minY, br.y); maxY = Math.max(maxY, br.y + br.h);
+      n++;
+    }
+    if (!n) return;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const halfW = (maxX - minX) / 2;
+    const halfH = (maxY - minY) / 2;
+
+    // Predict ball toward top of playfield
+    let predX = ball.x, predY = ball.y;
+    let threat = 0;
+    const goingUp = ball.vy < -0.08;
+    if (goingUp || ball.y < H * 0.72) {
+      let px = ball.x, py = ball.y, pvx = ball.vx, pvy = ball.vy;
+      const steps = 55;
+      for (let f = 0; f < steps; f++) {
+        px += pvx; py += pvy;
+        if (px < ball.r) { px = ball.r; pvx = Math.abs(pvx); }
+        if (px > W - ball.r) { px = W - ball.r; pvx = -Math.abs(pvx); }
+        if (py < cy + halfH + 30 && goingUp) break;
+      }
+      predX = px; predY = py;
+      const distX = Math.abs(predX - cx);
+      const reach = halfW + ball.r + 70;
+      if (distX < reach + 120 || (side === 'left' ? predX < W * 0.62 : predX > W * 0.38)) {
+        threat = Math.max(0.25, 1.0 - distX / (reach + 160));
+      }
+    }
+
+    // Horizontal: chase ball but clamp to edge-anchor band
+    let desiredX = 0;
+    if (threat > 0.08) {
+      desiredX = predX < cx ? -1 : 1;
+      // Prefer blocking toward ball's path across the top
+      if (Math.abs(predX - cx) < 18) desiredX = side === 'left' ? 1 : -1; // nudge inward
+    } else {
+      const home = (me && me.homeDX != null) ? me.homeDX : 0;
+      desiredX = structureDX > home + 6 ? -0.4 : structureDX < home - 6 ? 0.4 : 0;
+    }
+
+    // Vertical: raise/lower to intercept
+    let desiredY = 0;
+    if (threat > 0.08) {
+      desiredY = predY < cy ? -1 : 1;
+    } else {
+      desiredY = structureDY > 8 ? -0.35 : structureDY < -8 ? 0.25 : 0;
+    }
+
+    const step = dt * 60;
+    const accel = 0.62 + threat * 1.15;
+    structureDVX += desiredX * accel * step;
+    structureDVX *= 0.90;
+    structureDVX = Math.max(-5.8, Math.min(5.8, structureDVX));
+    structureDX += structureDVX * step;
+
+    const accelY = 0.55 + threat * 1.05;
+    structureDVY += desiredY * accelY * step;
+    structureDVY *= 0.90;
+    structureDVY = Math.max(-5.4, Math.min(5.4, structureDVY));
+    structureDY += structureDVY * step;
+
+    // Clamp to side anchor band (never fully enter center)
+    if (me) {
+      const minDX = me.l8MinInward != null ? me.l8MinInward : structureDX;
+      const maxDX = me.l8MaxInward != null ? me.l8MaxInward : structureDX;
+      if (structureDX < minDX) { structureDX = minDX; structureDVX = Math.abs(structureDVX) * 0.35; }
+      if (structureDX > maxDX) { structureDX = maxDX; structureDVX = -Math.abs(structureDVX) * 0.35; }
+      const minDY = me.l8MinDY != null ? me.l8MinDY : -120;
+      const maxDY = me.l8MaxDY != null ? me.l8MaxDY : 160;
+      if (structureDY < minDY) { structureDY = minDY; structureDVY = Math.abs(structureDVY) * 0.35; }
+      if (structureDY > maxDY) { structureDY = maxDY; structureDVY = -Math.abs(structureDVY) * 0.35; }
+    }
+
+    // Soft screen clamp — allow overhang on own edge
+    const left = originX + structureDX;
+    const right = originX + imgW * fitScale + structureDX;
+    if (side === 'left') {
+      if (right > W * 0.58) { structureDX -= right - W * 0.58; structureDVX *= -0.3; }
+    } else {
+      if (left < W * 0.42) { structureDX += W * 0.42 - left; structureDVX *= -0.3; }
+    }
+
+    structureAV *= 0.85;
+    structureAngle *= 0.9;
+    applyStructureOffset();
+  }
+
   function buildLevel() {
     resizeCanvas();
     clearL6Timers();
@@ -1952,6 +2231,7 @@
     l6CamFX = null;
     resetDamageFX();
     structures = [];
+    resetL8State();
     l6RookStarted = false;
     l6RooksSpawned = 0;
     l6Phase = 'pawns';
@@ -1992,6 +2272,73 @@
     gridUpper = null;
     brickLayerLower = null;
     brickLayerUpper = null;
+
+    if (level().queenBoss) {
+      // Queen is backdrop only — no bricks yet; hands spawn after intro
+      cols = 1; rows = 1; cell = 8; cellScreen = 8; brickPx = 8;
+      originX = 0; originY = 0; fitScale = 1;
+      minIy = 0; maxIy = 0;
+      groundY = H * (level().groundFrac || 0.90);
+      grid = new Int32Array(1); grid[0] = -1;
+      brickLayer = makeBrickLayerCanvas();
+      structureCount = 0;
+      structureStartCount = 1;
+      aliveCount = 0;
+      window.__dualStart = null;
+      particles = [];
+      bombs = [];
+      playerBomb = null;
+      playerBombArmed = false;
+      setBombButton(false);
+      bombTimer = 2.5;
+      lives = START_LIVES;
+      gameOver = false;
+      won = false;
+      outro = null;
+      outroT = 0;
+      window.__outroDust = false;
+      bgT = 0;
+      bgDust = [];
+      for (let i = 0; i < 22; i++) {
+        bgDust.push({
+          x: Math.random() * W,
+          y: Math.random() * H * 0.55,
+          r: 0.5 + Math.random() * 1.6,
+          vx: 0.1 + Math.random() * 0.28,
+          vy: (Math.random() - 0.5) * 0.06,
+          a: 0.08 + Math.random() * 0.16,
+        });
+      }
+      launched = false;
+      clearLaserCannons();
+      basePaddleW = Math.min(168, W * 0.42) * (level().paddleScale || 1);
+      const pw = basePaddleW;
+      const ph = paddleHeightForWidth(pw);
+      paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
+      paddleTrail = [];
+      bigPaddleUntil = 0;
+      ballAirTrail = [];
+      const diameter = Math.max(brickPx * 3.92, 12);
+      baseBallR = diameter / 2;
+      const r = baseBallR * ballRadiusMult();
+      ball = {
+        r,
+        x: 0, y: 0, vx: 0, vy: 0,
+        speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult(),
+      };
+      stickBallToPaddle();
+      l8Intro = true;
+      l8IntroT = 0;
+      l8CamY = 0;
+      l8HandsSpawned = 0;
+      l8HandSpawnAt = 0;
+      l8Phase = 'intro';
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>La Reina…</strong><span>Una presencia colosal</span>';
+      updateHud();
+      running = true;
+      return;
+    }
 
     if (level().dualLayer && imgDataLower && imgDataUpper) {
       // ONE body, two layers — shared origin/fit/transform/cell forever
@@ -2307,6 +2654,7 @@
 
   function launch() {
     if (launched || gameOver || won) return;
+    if (level().queenBoss && (l8Intro || l8Phase === 'intro')) return;
     launched = true;
     hint.classList.remove('show');
     const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.65;
@@ -2666,7 +3014,7 @@
   }
 
   function spawnBomb() {
-    if (gameOver || won || !launched || l6Transit) return;
+    if (gameOver || won || !launched || l6Transit || l8Intro) return;
     const candidates = [];
     const gather = () => {
       for (const br of bricks) {
@@ -3349,6 +3697,10 @@
   }
 
   function updateDodgeAI(dt) {
+    if (level().queenBoss) {
+      if (structures.length && !l8Intro) eachStructure(() => updateL8HandAI(dt));
+      return;
+    }
     if (level().jump) {
       if (structures.length) eachStructure(() => updateJumpAI(dt));
       else updateJumpAI(dt);
@@ -3504,6 +3856,20 @@
     if (paused) {
       updateBg(dt * 0.3);
       return;
+    }
+    if (level().queenBoss && (l8Intro || l8Phase === 'intro')) {
+      updateBg(dt);
+      updateL8Intro(dt);
+      // paddle still tracks
+      if (pointerX != null && paddle) {
+        paddle.x = pointerX - paddle.w / 2;
+        paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
+      }
+      if (ball && paddle) stickBallToPaddle();
+      return;
+    }
+    if (level().queenBoss && l8Phase === 'hands') {
+      updateL8HandSpawns();
     }
     if (l6Transit) {
       updateBg(dt);
@@ -4104,8 +4470,29 @@
 
   function drawBackground() {
     if (!bgImg) {
-      ctx.fillStyle = '#1a0f08';
+      ctx.fillStyle = level().queenBoss ? '#07060e' : '#1a0f08';
       ctx.fillRect(0, 0, W, H);
+      return;
+    }
+    if (level().queenBoss) {
+      const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
+      const scale = Math.max(W / iw, H / ih) * 1.05;
+      const dw = iw * scale, dh = ih * scale;
+      const dx = -(dw - W) * 0.5;
+      const dy = -(dh - H) * 0.5 + Math.sin(bgT * 0.04) * 3;
+      ctx.drawImage(bgImg, dx, dy, dw, dh);
+      const grd = ctx.createRadialGradient(W * 0.5, H * 0.28, 20, W * 0.5, H * 0.4, H * 0.75);
+      grd.addColorStop(0, 'rgba(40,10,30,0.05)');
+      grd.addColorStop(0.55, 'rgba(6,4,14,0.35)');
+      grd.addColorStop(1, 'rgba(2,1,6,0.72)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, H);
+      for (const p of bgDust) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(180, 120, 255, ${p.a * 0.7})`;
+        ctx.fill();
+      }
       return;
     }
     const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
@@ -4235,6 +4622,14 @@
     let rot = (Math.sin(t * 13.1) * amp) * 0.00055;
     let sx = 1, sy = 1;
 
+    // L8 intro: slight zoom-in as we rise to the Queen's face
+    if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'hands')) {
+      const z = 1 + (l8Intro ? l8CamY * 0.04 : 0.045);
+      sx *= z; sy *= z;
+      // Extra upward feel while rising (world slides down a touch)
+      if (l8Intro) oy -= (1 - l8CamY) * 10;
+    }
+
     // L6: head turn right — pan/yaw (no flip). Looking right → world slides left;
     // new view enters from the right. Soft FOV stretch then settle.
     if (l6CamFX) {
@@ -4259,15 +4654,16 @@
     ctx.translate(-W / 2, -H / 2);
 
     drawBackground();
-    drawGround();
+    if (level().queenBoss) drawL8Queen();
+    if (!level().queenBoss) drawGround();
     if (!level().fly) {
       if (structures.length) eachStructure(() => drawMechShadow());
-      else drawMechShadow();
+      else if (!level().queenBoss) drawMechShadow();
     }
     if (structures.length) eachStructure(() => drawStructureLayer());
-    else drawStructureLayer();
+    else if (!level().queenBoss) drawStructureLayer();
     if (structures.length) eachStructure(() => drawLooseBricks());
-    else drawLooseBricks();
+    else if (!level().queenBoss) drawLooseBricks();
     drawParticles();
     drawBombs();
     drawLaserBeams();
@@ -4335,7 +4731,7 @@
     if (paused) return;
     pointerX = pointerPos(e).x;
     if (window.__gotoNext) { startNextLevel(); return; }
-    if (!launched && !gameOver && !won && !l6Transit) launch();
+    if (!launched && !gameOver && !won && !l6Transit && !(level().queenBoss && l8Intro)) launch();
   }
   function onMove(e) {
     e.preventDefault();
