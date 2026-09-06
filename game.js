@@ -2223,6 +2223,88 @@
     }
   }
 
+
+  /** Explosión espectacular de bomba de tienda: fuego, humo, chispas, escombros. */
+  function spawnShopBombBlast(x, y) {
+    bumpCam(12);
+    // Núcleo de fuego
+    spawnDust(x, y, 'rgb(255,220,80)', 48, { spread: 2.8, up: 3.8, big: true, long: true, jitter: 18, hemisphere: true });
+    spawnDust(x, y, 'rgb(255,120,30)', 56, { spread: 3.2, up: 4.2, big: true, long: true, jitter: 22 });
+    spawnDust(x, y, 'rgb(255,60,20)', 36, { spread: 2.6, up: 2.8, big: true, long: true, jitter: 16 });
+    // Humo negro/gris
+    spawnDust(x, y - 6, 'rgb(40,40,45)', 50, { spread: 3.4, up: 3.0, big: true, long: true, jitter: 28, hemisphere: true });
+    spawnDust(x, y - 10, 'rgb(90,85,80)', 40, { spread: 2.8, up: 3.6, big: true, long: true, jitter: 24, hemisphere: true });
+    spawnDust(x, y + 4, 'rgb(60,55,50)', 28, { ground: true, hemisphere: true, spread: 3.0, up: 2.2, big: true, long: true, jitter: 30 });
+    // Chispas metálicas en ráfagas
+    for (let i = 0; i < 4; i++) {
+      spawnMetalSparks(x + (Math.random() - 0.5) * 28, y + (Math.random() - 0.5) * 18);
+    }
+    // Embers / brasas
+    for (let i = 0; i < 28; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 2.5 + Math.random() * 7;
+      particles.push({
+        x: x + (Math.random() - 0.5) * 12,
+        y: y + (Math.random() - 0.5) * 8,
+        vx: Math.cos(ang) * sp,
+        vy: Math.sin(ang) * sp - (2 + Math.random() * 4),
+        life: 0.45 + Math.random() * 0.7,
+        maxLife: 0.7 + Math.random() * 0.7,
+        size: 1.4 + Math.random() * 3.2,
+        r: 255,
+        g: 120 + ((Math.random() * 100) | 0),
+        b: 20 + ((Math.random() * 40) | 0),
+        spin: (Math.random() - 0.5) * 1.2,
+        metal: true,
+      });
+    }
+    // Flash breve
+    hurtFlash = Math.max(hurtFlash, 0.18);
+    if (particles.length > 1100) particles.splice(0, particles.length - 1100);
+  }
+
+  function flingBricksFromBlast(x, y, R) {
+    const r2 = R * R;
+    const fling = (list) => {
+      for (const br of list) {
+        if (!br.alive || br.settled) continue;
+        if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+        const cx = br.x + br.w / 2;
+        const cy = br.y + br.h / 2;
+        const dx = cx - x;
+        const dy = cy - y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > r2 * 1.35) continue;
+        if (br.falling) {
+          const d = Math.sqrt(d2) || 1;
+          const force = (2.8 + Math.random() * 3.2) * (1 - Math.min(1, d / (R * 1.2)));
+          br.vx += (dx / d) * force;
+          br.vy += (dy / d) * force - (1.5 + Math.random() * 2.5);
+          continue;
+        }
+        // Arrancar de la estructura y lanzar
+        const wasStructure = !br.falling;
+        if (wasStructure && !br.panel) {
+          const g = gridForBrick(br);
+          let id = -1;
+          if (g) {
+            const gi = br.iy * cols + br.ix;
+            id = (gi >= 0 && gi < g.length) ? g[gi] : -1;
+          }
+          clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
+        }
+        br.falling = true;
+        const d = Math.sqrt(d2) || 1;
+        const force = (3.5 + Math.random() * 4.5) * (1 - Math.min(1, d / (R * 1.25)));
+        br.vx = (dx / d) * force + (Math.random() - 0.5) * 1.5;
+        br.vy = (dy / d) * force - (2.2 + Math.random() * 3.5);
+        drawBrickToLayer(br);
+      }
+    };
+    if (structures.length) eachStructure(() => fling(bricks));
+    else fling(bricks);
+  }
+
   function launch() {
     if (launched || gameOver || won) return;
     launched = true;
@@ -2562,12 +2644,17 @@
   }
 
   function explodeAt(x, y, radius, ptsPerBrick) {
-    bumpCam(radius && radius > EXPLODE_R ? 7.2 : 5.5);
+    const big = radius != null && radius > EXPLODE_R;
+    bumpCam(big ? 9.5 : 5.5);
     const R = radius != null ? radius : EXPLODE_R;
     const pts = ptsPerBrick != null ? ptsPerBrick : 1;
     const r2 = R * R;
-    spawnDust(x, y, 'rgb(255,120,40)', radius && radius > EXPLODE_R ? 56 : 40);
-    spawnDust(x, y, 'rgb(80,80,80)', radius && radius > EXPLODE_R ? 36 : 24);
+    spawnDust(x, y, 'rgb(255,120,40)', big ? 64 : 40);
+    spawnDust(x, y, 'rgb(80,80,80)', big ? 44 : 24);
+    if (big) {
+      spawnDust(x, y, 'rgb(255,200,60)', 30, { spread: 2.4, up: 3.2, big: true, long: true, jitter: 14 });
+      spawnMetalSparks(x, y);
+    }
     if (structures.length) {
       eachStructure(() => explodeAtOnCurrent(x, y, R, pts, r2));
       refreshTotalStructureCount();
@@ -2842,8 +2929,8 @@
     let landed = 0;
     let landX = 0;
     const flying = !!(level().fly);
-    // L6/L7: caen y desaparecen al suelo (sin amontonar) para aliviar carga
-    const despawnAtGround = level().id === 6 || level().id === 7;
+    // Todos los niveles: caen y desaparecen al suelo (sin amontonar) para aliviar carga
+    const despawnAtGround = true;
     for (const br of bricks) {
       if (!br.alive || !br.falling || br.settled) continue;
       // En niveles aéreos: gravedad suave + deriva, sin amontonar en el suelo
@@ -3858,7 +3945,13 @@
     // Detonate on first alive structure brick hit (no fuse timer)
     if (playerBombHitsStructureBrick(b)) {
       b.phase = 'armed';
-      explodeAt(b.x, b.y, EXPLODE_R * 1.55, 1);
+      const bx = b.x, by = b.y;
+      const R = EXPLODE_R * 2.05;
+      spawnShopBombBlast(bx, by);
+      flingBricksFromBlast(bx, by, R);
+      explodeAt(bx, by, R, 1);
+      spawnShopBombBlast(bx, by - 8); // segunda oleada visual
+      bumpCam(6);
       b.alive = false;
       playerBomb = null;
       return;
