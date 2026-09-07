@@ -230,7 +230,8 @@
   let l8QueenImg = null;
   let l8HandsSpawned = 0;
   let l8HandSpawnAt = 0; // performance.now() when left hand spawned; right at +5s
-  let l8Phase = 'idle'; // idle | intro | hands | head | torso | flash
+  let l8Phase = 'idle'; // idle | intro | hands | head | fade | torso | flash
+  let l8Fade = null; // { t, out, hold, inn, donePrep } fundido a negro cara→torso
   let l8SpawnBusy = false;
   let l8Debris = [];
   let l8DebrisTimer = 0;
@@ -1138,6 +1139,7 @@
       if (l8Phase === 'hands' && l8HandsSpawned < 2) return;
       if (l8Phase === 'head' && l8SpawnBusy) return;
       if (l8Phase === 'torso' && l8SpawnBusy) return;
+      if (l8Phase === 'fade') return;
       if (l8Phase !== 'hands' && l8Phase !== 'head' && l8Phase !== 'torso') return;
     }
     refreshTotalStructureCount();
@@ -2156,6 +2158,7 @@
     l8HandsSpawned = 0;
     l8HandSpawnAt = 0;
     l8Phase = 'idle';
+    l8Fade = null;
     l8SpawnBusy = false;
     l8Debris = [];
     l8DebrisTimer = 0.6 + Math.random() * 0.8;
@@ -2366,7 +2369,7 @@
 
   function beginL8HeadPhase() {
     if (!level().queenBoss) return;
-    if (l8Phase === 'head' || l8Phase === 'torso' || l8Phase === 'flash') return;
+    if (l8Phase === 'head' || l8Phase === 'torso' || l8Phase === 'fade' || l8Phase === 'flash') return;
     outro = null;
     outroT = 0;
     window.__outroDust = false;
@@ -2557,9 +2560,91 @@
     });
   }
 
-  function beginL8TorsoPhase() {
+  /** Fundido a negro después de la cara; prepara torso en la oscuridad (alivia CPU). */
+  function requestL8TorsoTransition() {
     if (!level().queenBoss) return;
-    if (l8Phase === 'torso' || l8Phase === 'flash') return;
+    if (l8Phase === 'torso' || l8Phase === 'fade' || l8Fade) return;
+    if (l8Phase === 'flash') return;
+    outro = null;
+    outroT = 0;
+    window.__outroDust = false;
+    window.__gotoNext = false;
+    // Congelar pelea breve mientras disolvemos
+    particles = [];
+    bombs = [];
+    playerBomb = null;
+    l8Debris = [];
+    l8Lasers = [];
+    if (ball) { ball.vx = 0; ball.vy = 0; }
+    launched = false;
+    l8Phase = 'fade';
+    l8Fade = { t: 0, out: 0.65, hold: 0.9, inn: 0.7, donePrep: false, readyIn: false };
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>…</strong><span>La reina se recompone</span>';
+    bumpCam(3);
+  }
+
+  function updateL8Fade(dt) {
+    if (!l8Fade) return;
+    l8Fade.t += dt;
+    const { out, hold, inn } = l8Fade;
+    // Casi negro: montar torso (CPU trabaja fuera de vista)
+    if (!l8Fade.donePrep && l8Fade.t >= out * 0.9) {
+      l8Fade.donePrep = true;
+      beginL8TorsoPhase(true);
+    }
+    // No abrir el fundido hasta que el spawn del torso termine (o timeout hold)
+    const blackDone = l8Fade.t >= out + hold;
+    const spawnReady = l8Fade.donePrep && !l8SpawnBusy;
+    if (!l8Fade.readyIn && blackDone && (spawnReady || l8Fade.t > out + hold + 2.5)) {
+      l8Fade.readyIn = true;
+      l8Fade.inStart = l8Fade.t;
+    }
+    if (l8Fade.readyIn) {
+      const u = (l8Fade.t - (l8Fade.inStart || l8Fade.t)) / Math.max(1e-6, inn);
+      if (u >= 1) {
+        l8Fade = null;
+        if (paddle && ball) stickBallToPaddle();
+        hint.classList.add('show');
+        hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura · esquiva los láseres</span>';
+        clearTimeout(window.__hintHide);
+        window.__hintHide = setTimeout(() => {
+          if (launched && !gameOver && !paused) hint.classList.remove('show');
+        }, 3000);
+      }
+    }
+  }
+
+  function l8FadeBlackAlpha() {
+    if (!l8Fade) return 0;
+    const { t, out, inn } = l8Fade;
+    if (!l8Fade.readyIn) {
+      if (t <= out) return Math.min(1, t / Math.max(1e-6, out));
+      return 1; // negro sólido hasta que el torso esté listo
+    }
+    const u = (t - (l8Fade.inStart || t)) / Math.max(1e-6, inn);
+    return Math.max(0, 1 - u);
+  }
+
+  function drawL8FadeBlack() {
+    const a = l8FadeBlackAlpha();
+    if (a <= 0.001) return;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = `rgba(0,0,0,${a})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  function beginL8TorsoPhase(fromFade) {
+    if (!level().queenBoss) return;
+    if (l8Phase === 'torso' && !fromFade) return;
+    if (l8Phase === 'flash') return;
+    // Si no viene del fade, pedir transición (excepto boot ?phase=torso)
+    if (!fromFade && l8Phase !== 'fade' && !window.__l8TorsoBootSkipFade) {
+      requestL8TorsoTransition();
+      return;
+    }
     outro = null;
     outroT = 0;
     window.__outroDust = false;
@@ -2571,6 +2656,7 @@
     l8Debris = [];
     l8Lasers = [];
     clearL8HandStructures();
+    // Fase lógica = torso (el fundido negro lo pinta l8Fade, no l8Phase)
     l8Phase = 'torso';
     l8CamY = 1;
     l8EyeFlashT = 0.85;
@@ -2595,13 +2681,15 @@
         a: 0.12 + Math.random() * 0.28,
       });
     }
-    bumpCam(10);
-    hint.classList.add('show');
-    hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura · esquiva los láseres</span>';
-    clearTimeout(window.__hintHide);
-    window.__hintHide = setTimeout(() => {
-      if (launched && !gameOver && !paused) hint.classList.remove('show');
-    }, 3000);
+    bumpCam(fromFade ? 4 : 10);
+    if (!fromFade) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura · esquiva los láseres</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => {
+        if (launched && !gameOver && !paused) hint.classList.remove('show');
+      }, 3000);
+    }
     Promise.resolve(spawnL8Torso()).catch((e) => console.warn('l8 torso', e));
   }
 
@@ -5188,6 +5276,17 @@
     if (level().queenBoss && l8Phase === 'hands') {
       updateL8HandSpawns();
     }
+    if (level().queenBoss && l8Fade) {
+      updateL8Fade(dt);
+      // paddle track during fade
+      if (pointerX != null && paddle) {
+        paddle.x = pointerX - paddle.w / 2;
+        paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
+      }
+      if (ball && paddle) stickBallToPaddle();
+      updateBg(dt * 0.4);
+      return;
+    }
     if (level().queenBoss && l8EyeFlashT > 0) {
       l8EyeFlashT = Math.max(0, l8EyeFlashT - dt);
     }
@@ -6079,6 +6178,9 @@
       }
     }
     ctx.restore();
+    // Fundido a negro (pantalla completa, sin shake)
+    if (level().queenBoss && l8Fade) drawL8FadeBlack();
+
 
     // Screen-space damage overlays (flash / cracks / death glitch)
     if (level().queenBoss) drawL8EyeFlash();
