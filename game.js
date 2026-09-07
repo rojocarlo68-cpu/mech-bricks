@@ -805,7 +805,6 @@
       window.__hintHide = setTimeout(() => {
         if (launched && !gameOver && !paused) hint.classList.remove('show');
       }, 1400);
-      if (detached > 900) massCullFalling(400);
     }
     updateHud();
     maybeWin();
@@ -841,30 +840,6 @@
     return n;
   }
 
-  /** Mata escombros en exceso sin redibujar cada uno (evita freeze en L6). */
-  function massCullFalling(keepMax) {
-    keepMax = keepMax == null ? 350 : keepMax;
-    const cullOne = (list) => {
-      let falling = 0;
-      for (const br of list) if (br.alive && br.falling) falling++;
-      if (falling <= keepMax) return;
-      let drop = falling - keepMax;
-      for (const br of list) {
-        if (drop <= 0) break;
-        if (!br.alive || !br.falling) continue;
-        br.alive = false;
-        br.falling = false;
-        br.settled = false;
-        drop--;
-      }
-    };
-    if (structures.length) {
-      for (const S of structures) cullOne(S.bricks);
-    } else {
-      cullOne(bricks);
-    }
-  }
-
   function startSlowMoOutro() {
     if (outro || won || gameOver || l6Transit) return;
     if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'idle')) return;
@@ -879,23 +854,17 @@
     bombs = [];
     if (ball) { ball.vx = 0; ball.vy = 0; }
     bumpCam(8);
-    // Si hay miles cayendo, recortar YA (el freeze venía de dibujar/simular todos)
-    massCullFalling(280);
-    // FX liviano (antes 7×3 nubes trababan el frame)
-    for (let i = 0; i < 3; i++) {
-      const x = W * (0.25 + Math.random() * 0.5);
-      const y = Math.min(groundY - 40, H * (0.35 + Math.random() * 0.35));
-      spawnDust(x, y, 'rgb(255,110,30)', 12, { spread: 2.0, up: 2.6, big: true, long: true, jitter: 18 });
-      spawnDust(x, y, 'rgb(60,55,50)', 14, { ground: true, hemisphere: true, spread: 1.8, up: 2.0, big: true, long: true, jitter: 22 });
+    // Caos inicial: explosiones, humo, pedazos
+    for (let i = 0; i < 7; i++) {
+      const x = originX + Math.random() * (imgW * (cellScreen / Math.max(1, cell)));
+      const y = originY + Math.random() * (groundY - originY) * 0.85;
+      spawnDust(x, y, 'rgb(255,110,30)', 28, { spread: 2.4, up: 3.2, big: true, long: true, jitter: 30 });
+      spawnDust(x, y, 'rgb(60,55,50)', 34, { ground: true, hemisphere: true, spread: 2.2, up: 2.6, big: true, long: true, jitter: 40 });
+      spawnDust(x, y, 'rgb(200,200,200)', 18, { spread: 1.8, up: 2.0, long: true, jitter: 24 });
     }
-    // Empujar solo una muestra de escombros
-    let nudged = 0;
-    const nudgeList = structures.length
-      ? structures.flatMap((S) => S.bricks)
-      : bricks;
-    for (const br of nudgeList) {
+    // Empujar escombros que ya caen
+    for (const br of bricks) {
       if (!br.alive || !br.falling) continue;
-      if (nudged++ > 120) break;
       br.vx += (Math.random() - 0.5) * 4;
       br.vy -= Math.random() * 2.5;
     }
@@ -4126,13 +4095,13 @@
           br.alive = false;
           br.falling = false;
           br.settled = false;
-          // En slow-mo / avalancha: no redibujar capa por cada ladrillo (congela el browser)
-          if (outro !== 'slowmo' && landed < 40) drawBrickToLayer(br);
+          drawBrickToLayer(br);
           landed++;
           landX += x;
-          if (outro !== 'slowmo' && (landed <= 3 || Math.random() < 0.04)) {
-            spawnDust(x, groundY - 4, 'rgb(120,100,80)', 4, {
-              ground: true, hemisphere: true, spread: 1.1, up: 1.1, jitter: 10,
+          // polvo ligero ocasional (no por cada ladrillo)
+          if (landed <= 4 || Math.random() < 0.08) {
+            spawnDust(x, groundY - 4, 'rgb(120,100,80)', 6, {
+              ground: true, hemisphere: true, spread: 1.2, up: 1.2, jitter: 12,
             });
           }
         }
@@ -4747,19 +4716,17 @@
     let simDt = dt;
     if (outro === 'slowmo') {
       outroT += dt;
-      simDt = dt * 0.34;
-      // Mantener pocos escombros vivos para no congelar (esp. L6 multi-mech)
-      if (countFalling() > 320) massCullFalling(220);
-      // Cap de partículas
-      if (particles.length > 220) particles.splice(0, particles.length - 180);
-      // ráfagas ligeras
-      if (Math.random() < 0.045) {
-        bumpCam(0.9);
+      simDt = dt * 0.28;
+      // ráfagas de caos mientras cae
+      if (Math.random() < 0.08) {
+        bumpCam(1.2);
         const x = W * (0.2 + Math.random() * 0.6);
         const y = groundY - 20 - Math.random() * 120;
-        spawnDust(x, y, 'rgb(255,130,40)', 8, { spread: 1.8, up: 2.4, big: true, long: true, jitter: 14 });
+        spawnDust(x, y, 'rgb(255,130,40)', 16, { spread: 2.2, up: 3, big: true, long: true, jitter: 20 });
+        spawnDust(x, y, 'rgb(70,65,60)', 22, { ground: true, hemisphere: true, spread: 2, up: 2.4, big: true, long: true, jitter: 28 });
       }
       updateFalling(simDt);
+      // polvo también lento
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
         p.life -= simDt;
@@ -4784,16 +4751,15 @@
         paddleTrail[i].life -= dt * 3.2;
         if (paddleTrail[i].life <= 0) paddleTrail.splice(i, 1);
       }
-      // Terminar más pronto para no quedarse colgado
-      const fallingNow = countFalling();
-      if (fallingNow === 0 || outroT > 3.2) {
-        if (outroT < 2.8 && fallingNow === 0 && !window.__outroDust) {
+      // Terminar cuando dejen de caer o pase el dramatismo
+      if (countFalling() === 0 || outroT > 5.5) {
+        if (outroT < 5.2 && countFalling() === 0 && !window.__outroDust) {
           window.__outroDust = true;
-          for (let i = 0; i < 4; i++) spawnGroundCloud(W * (0.2 + i * 0.15), 1.2);
+          for (let i = 0; i < 10; i++) {
+            spawnGroundCloud(W * (0.12 + i * 0.08), 2.0);
+          }
         }
-        if (outroT > 3.2 || (fallingNow === 0 && outroT > 2.4)) {
-          // Limpieza final de escombros residuales
-          massCullFalling(0);
+        if (outroT > 5.5 || (countFalling() === 0 && outroT > 4.6 && window.__outroDust)) {
           window.__outroDust = false;
           finishOutro();
         }
