@@ -760,16 +760,34 @@
     }
 
     let detached = 0;
+    // Cara L8: no animar miles de caídas (congela al pasar a torso) — se esfuman
+    const l8HeadPop = level().queenBoss && l8Phase === 'head';
     for (let i = 0; i < n; i++) {
       const br = bricks[i];
       if (!br.alive || br.falling || br.settled) continue;
       if (supported[i]) continue;
       clearBrickGrid(br, i);
-      br.falling = true;
-      br.vx = (Math.random() - 0.5) * 0.55;
-      br.vy = 0.15 + Math.random() * 0.35;
-      drawBrickToLayer(br);
+      if (l8HeadPop) {
+        br.alive = false;
+        br.falling = false;
+        br.settled = false;
+      } else {
+        br.falling = true;
+        br.vx = (Math.random() - 0.5) * 0.55;
+        br.vy = 0.15 + Math.random() * 0.35;
+        drawBrickToLayer(br);
+      }
       detached++;
+    }
+    if (l8HeadPop && detached > 0 && brickLayer) {
+      try {
+        const lctx = brickLayer.getContext('2d');
+        lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        lctx.clearRect(0, 0, W, H);
+        for (const br of bricks) {
+          if (br.alive && !br.falling && !br.settled) drawBrickToLayer(br);
+        }
+      } catch (_) {}
     }
 
     let localCount = 0;
@@ -787,15 +805,22 @@
         if (br.alive && !br.falling && !br.settled) live++;
       }
       if (live <= 0 || live > startCount * 0.50) return;
+      const l8HeadPopC = level().queenBoss && l8Phase === 'head';
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
         if (layerName && br.layer !== layerName) continue;
         if (!br.alive || br.falling || br.settled) continue;
         clearBrickGrid(br, i);
-        br.falling = true;
-        br.vx = (Math.random() - 0.5) * 0.8;
-        br.vy = 0.2 + Math.random() * 0.5;
-        drawBrickToLayer(br);
+        if (l8HeadPopC) {
+          br.alive = false;
+          br.falling = false;
+          br.settled = false;
+        } else {
+          br.falling = true;
+          br.vx = (Math.random() - 0.5) * 0.8;
+          br.vy = 0.2 + Math.random() * 0.5;
+          drawBrickToLayer(br);
+        }
         detached++;
       }
     };
@@ -2539,6 +2564,12 @@
     outroT = 0;
     window.__outroDust = false;
     window.__gotoNext = false;
+    // Limpiar escombros/partículas de la cara ANTES del torso (evita freeze)
+    particles = [];
+    bombs = [];
+    playerBomb = null;
+    l8Debris = [];
+    l8Lasers = [];
     clearL8HandStructures();
     l8Phase = 'torso';
     l8CamY = 1;
@@ -2608,8 +2639,8 @@
       originY = oy;
       fitScale = fit;
 
-      const TORSO_MIN = Math.max(MIN_BRICKS, 5000);
-      const TORSO_CAP = Math.max(MAX_BRICKS, 12000);
+      const TORSO_MIN = 2800;
+      const TORSO_CAP = 6500;
       let localCell = 2;
       let bestN = 0;
       for (let c = 4; c >= 1; c--) {
@@ -2690,7 +2721,7 @@
         }
       }
       groundY += 0.5;
-      mergeIrregularBricks(0.28);
+      mergeIrregularBricks(0.22);
       for (const br of bricks) {
         br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
         br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
@@ -4538,6 +4569,25 @@
     const flying = !!(level().fly);
     // Todos los niveles: caen y desaparecen al suelo (sin amontonar) para aliviar carga
     const despawnAtGround = true;
+    // Cabeza reina: escombros en caída se borran al instante (no simular miles)
+    if (level().queenBoss && l8Phase === 'head') {
+      let any = false;
+      for (const br of bricks) {
+        if (!br.alive || !br.falling) continue;
+        br.alive = false;
+        br.falling = false;
+        br.settled = false;
+        any = true;
+      }
+      if (any && brickLayer) {
+        try {
+          const lctx = brickLayer.getContext('2d');
+          lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          lctx.clearRect(0, 0, W, H);
+        } catch (_) {}
+      }
+      return;
+    }
     for (const br of bricks) {
       if (!br.alive || !br.falling || br.settled) continue;
       // En niveles aéreos: gravedad suave + deriva, sin amontonar en el suelo
