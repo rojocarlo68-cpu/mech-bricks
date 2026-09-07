@@ -45,7 +45,11 @@
       const n = parseInt(q.get('level') || q.get('n') || '1', 10);
       if (n >= 1 && n <= LEVELS.length) levelIndex = n - 1;
       const phase = (q.get('phase') || q.get('skip') || '').toLowerCase();
-      if (phase === 'head' || phase === 'cabeza' || phase === 'after-hands' || phase === 'post-manos') {
+      // Solo aplica si ya entraste directo al nivel 8 (no en campaña desde el 1)
+      if (
+        levelIndex === 7 &&
+        (phase === 'head' || phase === 'cabeza' || phase === 'after-hands' || phase === 'post-manos')
+      ) {
         l8BootSkipToHead = true;
       }
       const mRaw = q.get('money') || q.get('m') || q.get('cash') || q.get('dinero');
@@ -975,7 +979,10 @@
     try {
       const u = new URL(location.href);
       u.searchParams.set('level', String(levelIndex + 1));
-      history.replaceState(null, '', u.pathname + u.search);
+      // No arrastrar atajos de prueba al siguiente nivel
+      u.searchParams.delete('phase');
+      u.searchParams.delete('skip');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
     } catch (_) {}
   }
 
@@ -1034,6 +1041,7 @@
     window.__gotoNext = false;
     if (levelIndex + 1 >= LEVELS.length) return;
     levelIndex++;
+    l8BootSkipToHead = false; // campaña: L8 siempre con intro → manos → cabeza
     syncLevelUrl();
     loading.classList.remove('hide');
     loading.textContent = `Cargando ${level().name}…`;
@@ -5993,6 +6001,7 @@
     closeAllMenus();
     setPauseBtn(false);
     levelIndex = li;
+    l8BootSkipToHead = false; // load = inicio de nivel (intro completo en L8)
     syncLevelUrl();
     loading.classList.remove('hide');
     loading.textContent = `Cargando ${level().name}…`;
