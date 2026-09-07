@@ -244,8 +244,8 @@
   let l8HeadStartCount = 0;
   let l8TorsoStartCount = 0;
   let l8HeadFrac = 0.132; // solo corona+cara (antes de hombros/pecho) // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
-  let l8ChestV0 = 0.14; // torso armor UV band (fraction of sprite height)
-  let l8ChestV1 = 0.45;
+  let l8ChestV0 = 0.22; // pecho+torso (sin falda)
+  let l8ChestV1 = 0.52;
   let l8Lasers = []; // {x0,y0,x1,y1,t,dur,w} brief diagonal (head) OR bounce beams (torso)
   let l8LaserCd = 0;
   let l8LasersDone = false;
@@ -254,6 +254,9 @@
   let l8RooftopGroundY = 0; // playfield ground for queen feet / bg (stable across brick spawns)
   let l8TorsoQuakeT = 0;
   let l8ExtraDust = []; // floating dust during torso earthquake
+  let l8TorsoDriftX = 0;
+  let l8TorsoDriftTarget = 0;
+  let l8TorsoDriftTimer = 0;
 
   function size() {
     return {
@@ -2172,6 +2175,9 @@
     l8HeadOriginY = 0;
     l8TorsoQuakeT = 0;
     l8ExtraDust = [];
+    l8TorsoDriftX = 0;
+    l8TorsoDriftTarget = 0;
+    l8TorsoDriftTimer = 0;
     window.__l8LaserImmuneUntil = 0;
   }
 
@@ -2216,9 +2222,14 @@
     }
     // Subtle queen sway after intro: slow sine DX left-right (feet stay planted)
     let px = 0, py = 0;
-    if (!l8Intro && (l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso' || l8Phase === 'idle')) {
-      px = Math.sin(bgT * 0.22) * (torsoMode ? 10 : 14);
-      py = Math.cos(bgT * 0.18) * (torsoMode ? 1.2 : 1.8);
+    if (!l8Intro && (l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'idle')) {
+      px = Math.sin(bgT * 0.22) * 14;
+      py = Math.cos(bgT * 0.18) * 1.8;
+    }
+    if (torsoMode) {
+      // Movimiento lento al azar de un lado a otro
+      px = l8TorsoDriftX;
+      py = Math.cos(bgT * 0.15) * 2.2;
     }
     return { dx: dx + px, dy: dy + py, dw, dh, torso: torsoMode };
   }
@@ -2606,7 +2617,7 @@
         l8Fade = null;
         if (paddle && ball) stickBallToPaddle();
         hint.classList.add('show');
-        hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura · esquiva los láseres</span>';
+        hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura del pecho</span>';
         clearTimeout(window.__hintHide);
         window.__hintHide = setTimeout(() => {
           if (launched && !gameOver && !paused) hint.classList.remove('show');
@@ -2671,20 +2682,20 @@
     if (l8BgTorsoImg) bgImg = l8BgTorsoImg;
     // Dense earthquake dust
     bgDust = [];
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < 110; i++) {
       bgDust.push({
         x: Math.random() * W,
         y: Math.random() * H,
-        r: 0.6 + Math.random() * 2.4,
-        vx: 0.12 + Math.random() * 0.45,
-        vy: (Math.random() - 0.5) * 0.22,
-        a: 0.12 + Math.random() * 0.28,
+        r: 0.7 + Math.random() * 3.0,
+        vx: 0.1 + Math.random() * 0.55,
+        vy: (Math.random() - 0.5) * 0.28,
+        a: 0.14 + Math.random() * 0.34,
       });
     }
     bumpCam(fromFade ? 4 : 10);
     if (!fromFade) {
       hint.classList.add('show');
-      hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura · esquiva los láseres</span>';
+      hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura del pecho</span>';
       clearTimeout(window.__hintHide);
       window.__hintHide = setTimeout(() => {
         if (launched && !gameOver && !paused) hint.classList.remove('show');
@@ -2695,15 +2706,17 @@
 
   /** Prefer light / white / gold chest armor pixels; skip dark cable arms. */
   function avgCellChestArmor(ix, iy, cellSize) {
+    // Solo franja central (pecho/torso), no brazos de cables a los lados
+    const u = ((ix + 0.5) * cellSize) / Math.max(1, imgW);
+    if (u < 0.28 || u > 0.72) return null;
     const c = avgCell(ix, iy, cellSize);
     if (!c) return null;
     const luma = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
     const isGoldish = (c.r > 145 && c.g > 105 && c.b < c.r * 0.92 && (c.r + c.g) > c.b * 2.1);
-    const isLight = luma >= 118;
-    const isWhiteMetal = luma >= 150 && Math.abs(c.r - c.g) < 40 && Math.abs(c.g - c.b) < 45;
+    const isLight = luma >= 125;
+    const isWhiteMetal = luma >= 155 && Math.abs(c.r - c.g) < 40 && Math.abs(c.g - c.b) < 45;
     if (!(isLight || isGoldish || isWhiteMetal)) return null;
-    // Extra reject very dark / cold cable tones
-    if (luma < 100 && !isGoldish) return null;
+    if (luma < 110 && !isGoldish) return null;
     return c;
   }
 
@@ -2851,8 +2864,9 @@
       applyStructure(structures[0]);
       groundY = savedGround;
       syncL8TorsoToQueen();
-      // Start dual bouncing eye lasers
-      initL8TorsoBounceLasers();
+      // Láseres de ojos desactivados por ahora (afinar pecho primero)
+      l8Lasers = [];
+      l8LasersDone = true;
       updateHud();
       bumpCam(4.5);
       console.log('[l8-torso] bricks', bricks.length);
@@ -3126,31 +3140,10 @@
       return;
     }
 
-    // TORSO: two permanent bouncing beams from eyes
-    if (l8Phase !== 'torso') return;
-    if (!l8Lasers.length) initL8TorsoBounceLasers();
-
-    for (const L of l8Lasers) {
-      if (!L.bounce) continue;
-      if (L.eyeIdx != null) {
-        const e = l8EyeWorldPos(L.eyeIdx);
-        L.x0 = e.x; L.y0 = e.y;
-      }
-      // Slight random drift of direction over time
-      L.dx += (Math.random() - 0.5) * 0.55 * dt;
-      L.dy += (Math.random() - 0.5) * 0.55 * dt;
-      const sp = Math.hypot(L.dx, L.dy) || 1;
-      L.dx /= sp; L.dy /= sp;
-      // Prefer somewhat downward so beams sweep the playfield
-      if (L.dy < 0.15) L.dy += 0.35 * dt;
-      rebuildL8BounceRay(L, 6);
-      L.t += dt;
-      if (
-        !paused && !gameOver && !won && launched &&
-        l8LaserHitsPaddle(L)
-      ) {
-        damageFromL8EyeLaser(dt, true);
-      }
+    // TORSO: láseres desactivados temporalmente
+    if (l8Phase === 'torso') {
+      l8Lasers = [];
+      return;
     }
   }
 
@@ -3409,14 +3402,15 @@
     const step = dt * 60;
     const debrisActive = !paused && !gameOver && !won && !outro && l8Phase !== 'idle';
     // Moderate spawn rate — rains during intro + hands (even if ball on paddle)
-    if ((l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso' || l8Intro || l8Phase === 'intro') && debrisActive) {
+    // En fase pecho/torso: sin escombros (solo polvo / explosiones)
+    if (l8Phase === 'torso') {
+      l8Debris = [];
+    } else if ((l8Phase === 'hands' || l8Phase === 'head' || l8Intro || l8Phase === 'intro') && debrisActive) {
       l8DebrisTimer -= dt;
       if (l8DebrisTimer <= 0) {
         spawnL8Debris();
-        if (Math.random() < (l8Phase === 'torso' ? 0.45 : 0.28)) spawnL8Debris();
-        if (l8Phase === 'torso' && Math.random() < 0.35) spawnL8Debris();
-        l8DebrisTimer = (l8Intro ? 1.2 : (l8Phase === 'torso' ? 0.45 : 0.85))
-          + Math.random() * (l8Intro ? 1.4 : (l8Phase === 'torso' ? 0.7 : 1.35));
+        if (Math.random() < 0.28) spawnL8Debris();
+        l8DebrisTimer = (l8Intro ? 1.2 : 0.85) + Math.random() * (l8Intro ? 1.4 : 1.35);
       }
     }
     // Debris passes through hands — only ball + paddle. Floor = bottom of screen.
@@ -4318,6 +4312,18 @@
     const hx = br.x + br.w / 2, hy = br.y + br.h / 2;
     spawnDust(hx, hy, br.color, br.hp <= 1 ? 14 : 8);
     spawnMetalSparks(hx, hy); // chispas metal-metal
+    // Fase pecho: explosiones al azar al golpear armadura
+    if (level().queenBoss && l8Phase === 'torso' && Math.random() < 0.38) {
+      bumpCam(2.8 + Math.random() * 3.2);
+      if (typeof spawnShopBombBlast === 'function') {
+        spawnShopBombBlast(hx, hy);
+        if (Math.random() < 0.45) spawnShopBombBlast(hx + (Math.random() - 0.5) * 28, hy - 10 - Math.random() * 20);
+      } else {
+        spawnDust(hx, hy, 'rgb(255,120,40)', 36, { spread: 2.4, up: 3.2, big: true, long: true, jitter: 18 });
+        spawnDust(hx, hy, 'rgb(60,55,50)', 28, { ground: true, hemisphere: true, spread: 2.0, up: 2.4, big: true, long: true, jitter: 22 });
+      }
+      spawnMetalSparks(hx, hy);
+    }
     br.hp -= ballDamage() * (level().brickDamageMult || 1);
     score += 1; // $1 por golpe
     if (br.hp <= 0) {
@@ -5294,21 +5300,31 @@
       updateL8EyeLasers(dt);
     }
     if (level().queenBoss && l8Phase === 'torso' && !paused && !won && !gameOver) {
-      // Earthquake: periodic cam bumps + extra floating dust
+      // Drift lento al azar (lado a lado)
+      l8TorsoDriftTimer -= dt;
+      if (l8TorsoDriftTimer <= 0) {
+        l8TorsoDriftTarget = (Math.random() * 2 - 1) * Math.min(56, W * 0.12);
+        l8TorsoDriftTimer = 1.8 + Math.random() * 2.8;
+      }
+      l8TorsoDriftX += (l8TorsoDriftTarget - l8TorsoDriftX) * Math.min(1, dt * 0.55);
+
+      // Earthquake + MÁS polvo
       l8TorsoQuakeT -= dt;
       if (l8TorsoQuakeT <= 0) {
-        bumpCam(2.2 + Math.random() * 3.5);
-        l8TorsoQuakeT = 0.18 + Math.random() * 0.35;
+        bumpCam(2.4 + Math.random() * 3.8);
+        l8TorsoQuakeT = 0.14 + Math.random() * 0.28;
       }
-      if (Math.random() < dt * 8) {
+      const dustBurst = Math.max(2, (dt * 22) | 0);
+      for (let k = 0; k < dustBurst; k++) {
+        if (Math.random() > 0.65) continue;
         l8ExtraDust.push({
           x: Math.random() * W,
-          y: H * (0.15 + Math.random() * 0.75),
-          r: 0.8 + Math.random() * 3.2,
-          vx: (Math.random() - 0.5) * 1.2,
-          vy: -0.2 - Math.random() * 0.8,
-          a: 0.25 + Math.random() * 0.45,
-          life: 0.8 + Math.random() * 1.4,
+          y: H * (0.08 + Math.random() * 0.85),
+          r: 0.7 + Math.random() * 4.2,
+          vx: (Math.random() - 0.5) * 1.6,
+          vy: -0.15 - Math.random() * 1.1,
+          a: 0.22 + Math.random() * 0.5,
+          life: 0.9 + Math.random() * 1.8,
         });
       }
       for (let i = l8ExtraDust.length - 1; i >= 0; i--) {
@@ -5316,11 +5332,11 @@
         p.life -= dt;
         p.x += p.vx * dt * 60;
         p.y += p.vy * dt * 60;
-        p.vy += 0.01 * dt * 60;
-        p.a *= 0.992;
+        p.vy += 0.012 * dt * 60;
+        p.a *= 0.991;
         if (p.life <= 0 || p.a < 0.02) l8ExtraDust.splice(i, 1);
       }
-      if (l8ExtraDust.length > 120) l8ExtraDust.splice(0, l8ExtraDust.length - 120);
+      if (l8ExtraDust.length > 260) l8ExtraDust.splice(0, l8ExtraDust.length - 260);
     }
     if (l6Transit) {
       updateBg(dt);
