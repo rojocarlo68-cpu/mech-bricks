@@ -244,8 +244,9 @@
   let l8HeadStartCount = 0;
   let l8TorsoStartCount = 0;
   let l8HeadFrac = 0.132; // solo corona+cara (antes de hombros/pecho) // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
-  let l8ChestV0 = 0.22; // pecho+torso (sin falda)
-  let l8ChestV1 = 0.52;
+  let l8TorsoHeadFrac = 0.13; // cabeza visible (capa de abajo)
+  let l8ChestV0 = 0.13; // bajo la cabeza
+  let l8ChestV1 = 0.46; // antes de cintura/falda
   let l8Lasers = []; // {x0,y0,x1,y1,t,dur,w} brief diagonal (head) OR bounce beams (torso)
   let l8LaserCd = 0;
   let l8LasersDone = false;
@@ -2199,15 +2200,23 @@
       : (groundY > 0 ? groundY : H * (level().groundFrac != null ? level().groundFrac : 0.82));
     let scale, dw, dh, dx, dy;
     if (torsoMode) {
-      // Fill tall: feet on ground, head near top of frame
-      const targetH = Math.max(H * 0.92, gy - H * 0.01);
-      scale = (targetH / (ih * footFrac)) * 1.02;
-      // Prefer not overflowing width too wildly
-      if (iw * scale > W * 1.35) scale = (W * 1.35) / iw;
+      // Cuerpo completo visible (incluida la cabeza): pies cerca del suelo, margen arriba
+      const topPad = H * 0.04;
+      const availH = Math.max(80, gy - topPad);
+      scale = (availH / (ih * footFrac)) * 0.98;
+      if (iw * scale > W * 1.2) scale = (W * 1.2) / iw;
       dw = iw * scale;
       dh = ih * scale;
       dx = (W - dw) / 2;
       dy = gy - footFrac * dh;
+      // Si la cabeza se sale, reducir un poco más
+      if (dy < topPad * 0.5) {
+        scale *= 0.92;
+        dw = iw * scale;
+        dh = ih * scale;
+        dx = (W - dw) / 2;
+        dy = gy - footFrac * dh;
+      }
     } else {
       // Top ~38% of body ≈ face + chest; scale that band to viewport height
       const faceFrac = 0.38;
@@ -2253,8 +2262,16 @@
       ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
       ctx.restore();
     }
-    // Torso phase: underlayer clipped to chest armor band
+    // Torso: capa de abajo — cabeza siempre visible + pecho (donde se rompen ladrillos)
     if (torsoMode && under && under.naturalWidth) {
+      // Cabeza (capa inferior)
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(q.dx, q.dy, q.dw, q.dh * l8TorsoHeadFrac);
+      ctx.clip();
+      ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
+      ctx.restore();
+      // Pecho/torso band (revela al romper armadura)
       ctx.save();
       ctx.beginPath();
       ctx.rect(q.dx, q.dy + q.dh * l8ChestV0, q.dw, q.dh * (l8ChestV1 - l8ChestV0));
@@ -3655,22 +3672,25 @@
       };
       stickBallToPaddle();
       if (l8BootSkipToTorso) {
-        // Atajo de prueba: sin intro/manos/cabeza → directo a torso
+        // Atajo: como DESPUÉS de la transición a negro → torso jugable
         l8Intro = false;
         l8IntroT = 999;
         l8CamY = 1;
         l8HandsSpawned = 2;
         l8HandSpawnAt = 0;
-        l8Phase = 'head'; // beginL8TorsoPhase accepts from head
+        l8Phase = 'head';
         l8EyeFlashT = 0;
         l8HeadStartCount = 0;
         l8TorsoStartCount = 0;
         l8Lasers = [];
         l8LaserCd = 0;
-        l8LasersDone = false;
+        l8LasersDone = true;
+        l8Fade = null;
         updateHud();
         running = true;
-        beginL8TorsoPhase();
+        window.__l8TorsoBootSkipFade = true;
+        beginL8TorsoPhase(false);
+        window.__l8TorsoBootSkipFade = false;
         return;
       }
       if (l8BootSkipToHead) {
