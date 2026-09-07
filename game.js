@@ -27,7 +27,9 @@
   function levelBallSpeedMult() { return level().ballSpeed || 1; }
   // ?level=2 para probar nivel 2 directo
   // ?level=8&phase=head — saltar a fase de cabeza (sin manos)
+  // ?level=8&phase=torso — saltar a fase de torso (sin manos/cabeza)
   let l8BootSkipToHead = false;
+  let l8BootSkipToTorso = false;
   let bootMoney = null; // ?money=30000 o ?m=30000
   (function bootLevelFromUrl() {
     try {
@@ -51,6 +53,13 @@
         (phase === 'head' || phase === 'cabeza' || phase === 'after-hands' || phase === 'post-manos')
       ) {
         l8BootSkipToHead = true;
+      }
+      if (
+        levelIndex === 7 &&
+        (phase === 'torso' || phase === 'pecho' || phase === 'chest' || phase === 'body')
+      ) {
+        l8BootSkipToTorso = true;
+        l8BootSkipToHead = false;
       }
       const mRaw = q.get('money') || q.get('m') || q.get('cash') || q.get('dinero');
       if (mRaw != null && String(mRaw).trim() !== '') {
@@ -221,19 +230,29 @@
   let l8QueenImg = null;
   let l8HandsSpawned = 0;
   let l8HandSpawnAt = 0; // performance.now() when left hand spawned; right at +5s
-  let l8Phase = 'idle'; // idle | intro | hands | head | flash
+  let l8Phase = 'idle'; // idle | intro | hands | head | torso | flash
   let l8SpawnBusy = false;
   let l8Debris = [];
   let l8DebrisTimer = 0;
   let l8QueenUnderImg = null;
+  let l8QueenTorsoImg = null;
+  let l8QueenTorsoUnderImg = null;
+  let l8BgRooftopImg = null;
+  let l8BgTorsoImg = null;
   let l8EyeFlashT = 0; // red eye flash countdown (seconds)
   let l8HeadStartCount = 0;
+  let l8TorsoStartCount = 0;
   let l8HeadFrac = 0.132; // solo corona+cara (antes de hombros/pecho) // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
-  let l8Lasers = []; // {x0,y0,x1,y1,t,dur,w}
+  let l8ChestV0 = 0.14; // torso armor UV band (fraction of sprite height)
+  let l8ChestV1 = 0.45;
+  let l8Lasers = []; // {x0,y0,x1,y1,t,dur,w} brief diagonal (head) OR bounce beams (torso)
   let l8LaserCd = 0;
   let l8LasersDone = false;
   let l8HeadOriginX = 0;
   let l8HeadOriginY = 0;
+  let l8RooftopGroundY = 0; // playfield ground for queen feet / bg (stable across brick spawns)
+  let l8TorsoQuakeT = 0;
+  let l8ExtraDust = []; // floating dust during torso earthquake
 
   function size() {
     return {
@@ -370,9 +389,13 @@
       return Promise.all([
         loadImg(level().queen || 'mech-level8-queen.png'),
         loadImg(level().queenUnder || 'mech-level8-queen-under.png').catch(() => null),
-      ]).then(([img, under]) => {
+        loadImg('mech-level8-queen-torso.png').catch(() => null),
+        loadImg('mech-level8-queen-torso-under.png').catch(() => null),
+      ]).then(([img, under, torso, torsoUnder]) => {
         l8QueenImg = img;
         l8QueenUnderImg = under;
+        l8QueenTorsoImg = torso;
+        l8QueenTorsoUnderImg = torsoUnder;
       });
     }
     if (level().dualLayer && level().mechLower) {
@@ -849,6 +872,11 @@
       beginL8HeadPhase();
       return;
     }
+    // Head clear → torso phase (do not win yet)
+    if (level().queenBoss && l8Phase === 'head') {
+      beginL8TorsoPhase();
+      return;
+    }
     outro = 'slowmo';
     outroT = 0;
     bombs = [];
@@ -1008,6 +1036,11 @@
       beginL8HeadPhase();
       return;
     }
+    // L8 head clear → torso (not level win)
+    if (level().queenBoss && l8Phase === 'head') {
+      beginL8TorsoPhase();
+      return;
+    }
     // L6 wave 1 clear → camera turn + more mechs (not next level)
     if (level().id === 6 && l6Wave === 1) {
       outro = null;
@@ -1056,7 +1089,8 @@
     window.__gotoNext = false;
     if (levelIndex + 1 >= LEVELS.length) return;
     levelIndex++;
-    l8BootSkipToHead = false; // campaña: L8 siempre con intro → manos → cabeza
+    l8BootSkipToHead = false; // campaña: L8 siempre con intro → manos → cabeza → torso
+    l8BootSkipToTorso = false;
     syncLevelUrl();
     loading.classList.remove('hide');
     loading.textContent = `Cargando ${level().name}…`;
@@ -1078,15 +1112,24 @@
       if (l8Intro || l8Phase === 'intro' || l8Phase === 'idle') return;
       if (l8Phase === 'hands' && l8HandsSpawned < 2) return;
       if (l8Phase === 'head' && l8SpawnBusy) return;
-      if (l8Phase !== 'hands' && l8Phase !== 'head') return;
+      if (l8Phase === 'torso' && l8SpawnBusy) return;
+      if (l8Phase !== 'hands' && l8Phase !== 'head' && l8Phase !== 'torso') return;
     }
     refreshTotalStructureCount();
     const live = countAliveStructureBricks();
     structureCount = live;
-    if (live > 0) return;
+    if (live > 0) {
+      // Torso: if ≤50% remaining, keep playing until cleared (no early win)
+      return;
+    }
     // L8 hands cleared → head phase (not level win)
     if (level().queenBoss && l8Phase === 'hands' && l8HandsSpawned >= 2) {
       beginL8HeadPhase();
+      return;
+    }
+    // L8 head cleared → torso phase (not level win)
+    if (level().queenBoss && l8Phase === 'head') {
+      beginL8TorsoPhase();
       return;
     }
     // L6: wave 1 clear → finishOutro → l6PhaseTransition (camera + waves 2–3).
@@ -2093,11 +2136,15 @@
     l8DebrisTimer = 0.6 + Math.random() * 0.8;
     l8EyeFlashT = 0;
     l8HeadStartCount = 0;
+    l8TorsoStartCount = 0;
     l8Lasers = [];
     l8LaserCd = 0;
     l8LasersDone = false;
     l8HeadOriginX = 0;
     l8HeadOriginY = 0;
+    l8TorsoQuakeT = 0;
+    l8ExtraDust = [];
+    window.__l8LaserImmuneUntil = 0;
   }
 
   function l8EaseInOut(u) {
@@ -2105,45 +2152,75 @@
   }
 
   /** Queen draw transform: scale so face+chest fills viewport when cam settled.
-   *  Feet stay planted on groundY (rooftop floor) at camY=0; pan rises to face. */
+   *  Feet stay planted on groundY (rooftop floor) at camY=0; pan rises to face.
+   *  Torso phase: full-body torso sprites, tall in frame, feet near rooftop ground. */
   function l8QueenDrawParams() {
-    const img = l8QueenImg;
+    const torsoMode = (l8Phase === 'torso');
+    const img = torsoMode ? l8QueenTorsoImg : l8QueenImg;
     if (!img || !img.naturalWidth) return null;
     const iw = img.naturalWidth, ih = img.naturalHeight;
-    // Top ~38% of body ≈ face + chest; scale that band to viewport height
-    const faceFrac = 0.38;
-    const footFrac = 0.984; // opaque heel/toe near bottom of queen art
-    const scale = (H / (ih * faceFrac)) * 1.08;
-    const dw = iw * scale;
-    const dh = ih * scale;
-    const dx = (W - dw) / 2;
-    const gy = groundY > 0 ? groundY : H * (level().groundFrac != null ? level().groundFrac : 0.82);
-    // camY 0 → feet on rooftop ground plane; camY 1 → face+chest framed
-    const dyFeet = gy - footFrac * dh;
-    const dyFace = -dh * 0.02;
-    const dy = dyFeet + (dyFace - dyFeet) * l8CamY;
+    const footFrac = torsoMode ? 0.988 : 0.984; // opaque heel/toe near bottom of queen art
+    const gy = (l8RooftopGroundY > 0)
+      ? l8RooftopGroundY
+      : (groundY > 0 ? groundY : H * (level().groundFrac != null ? level().groundFrac : 0.82));
+    let scale, dw, dh, dx, dy;
+    if (torsoMode) {
+      // Fill tall: feet on ground, head near top of frame
+      const targetH = Math.max(H * 0.92, gy - H * 0.01);
+      scale = (targetH / (ih * footFrac)) * 1.02;
+      // Prefer not overflowing width too wildly
+      if (iw * scale > W * 1.35) scale = (W * 1.35) / iw;
+      dw = iw * scale;
+      dh = ih * scale;
+      dx = (W - dw) / 2;
+      dy = gy - footFrac * dh;
+    } else {
+      // Top ~38% of body ≈ face + chest; scale that band to viewport height
+      const faceFrac = 0.38;
+      scale = (H / (ih * faceFrac)) * 1.08;
+      dw = iw * scale;
+      dh = ih * scale;
+      dx = (W - dw) / 2;
+      // camY 0 → feet on rooftop ground plane; camY 1 → face+chest framed
+      const dyFeet = gy - footFrac * dh;
+      const dyFace = -dh * 0.02;
+      dy = dyFeet + (dyFace - dyFeet) * l8CamY;
+    }
     // Subtle queen sway after intro: slow sine DX left-right (feet stay planted)
     let px = 0, py = 0;
-    if (!l8Intro && (l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'idle')) {
-      px = Math.sin(bgT * 0.22) * 14;
-      py = Math.cos(bgT * 0.18) * 1.8;
+    if (!l8Intro && (l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso' || l8Phase === 'idle')) {
+      px = Math.sin(bgT * 0.22) * (torsoMode ? 10 : 14);
+      py = Math.cos(bgT * 0.18) * (torsoMode ? 1.2 : 1.8);
     }
-    return { dx: dx + px, dy: dy + py, dw, dh };
+    return { dx: dx + px, dy: dy + py, dw, dh, torso: torsoMode };
   }
 
   function drawL8Queen() {
     const q = l8QueenDrawParams();
-    if (!q || !l8QueenImg) return;
+    if (!q) return;
+    const torsoMode = !!q.torso;
+    const outer = torsoMode ? l8QueenTorsoImg : l8QueenImg;
+    const under = torsoMode ? l8QueenTorsoUnderImg : l8QueenUnderImg;
+    if (!outer) return;
     ctx.save();
     ctx.globalAlpha = 1;
-    ctx.drawImage(l8QueenImg, q.dx, q.dy, q.dw, q.dh);
-    // Head phase: underlayer skull clipped to head AABB (same transform as body)
-    if ((l8Phase === 'head' || l8EyeFlashT > 0) && l8QueenUnderImg && l8QueenUnderImg.naturalWidth) {
+    ctx.drawImage(outer, q.dx, q.dy, q.dw, q.dh);
+    // Head phase: underlayer skull clipped to head AABB
+    if (!torsoMode && (l8Phase === 'head' || l8EyeFlashT > 0) && under && under.naturalWidth) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(q.dx, q.dy, q.dw, q.dh * l8HeadFrac);
       ctx.clip();
-      ctx.drawImage(l8QueenUnderImg, q.dx, q.dy, q.dw, q.dh);
+      ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
+      ctx.restore();
+    }
+    // Torso phase: underlayer clipped to chest armor band
+    if (torsoMode && under && under.naturalWidth) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(q.dx, q.dy + q.dh * l8ChestV0, q.dw, q.dh * (l8ChestV1 - l8ChestV0));
+      ctx.clip();
+      ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
       ctx.restore();
     }
     // Soft darkness so hands/paddle read on top
@@ -2264,7 +2341,7 @@
 
   function beginL8HeadPhase() {
     if (!level().queenBoss) return;
-    if (l8Phase === 'head' || l8Phase === 'flash') return;
+    if (l8Phase === 'head' || l8Phase === 'torso' || l8Phase === 'flash') return;
     outro = null;
     outroT = 0;
     window.__outroDust = false;
@@ -2455,6 +2532,302 @@
     });
   }
 
+  function beginL8TorsoPhase() {
+    if (!level().queenBoss) return;
+    if (l8Phase === 'torso' || l8Phase === 'flash') return;
+    outro = null;
+    outroT = 0;
+    window.__outroDust = false;
+    window.__gotoNext = false;
+    clearL8HandStructures();
+    l8Phase = 'torso';
+    l8CamY = 1;
+    l8EyeFlashT = 0.85;
+    l8Lasers = [];
+    l8LaserCd = 0;
+    l8LasersDone = false;
+    l8TorsoStartCount = 0;
+    l8TorsoQuakeT = 0;
+    l8ExtraDust = [];
+    window.__l8LaserImmuneUntil = 0;
+    // Swap to torso background (keep rooftop cached)
+    if (l8BgTorsoImg) bgImg = l8BgTorsoImg;
+    // Dense earthquake dust
+    bgDust = [];
+    for (let i = 0; i < 70; i++) {
+      bgDust.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: 0.6 + Math.random() * 2.4,
+        vx: 0.12 + Math.random() * 0.45,
+        vy: (Math.random() - 0.5) * 0.22,
+        a: 0.12 + Math.random() * 0.28,
+      });
+    }
+    bumpCam(10);
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Su torso!</strong><span>Rompe la armadura · esquiva los láseres</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (launched && !gameOver && !paused) hint.classList.remove('show');
+    }, 3000);
+    Promise.resolve(spawnL8Torso()).catch((e) => console.warn('l8 torso', e));
+  }
+
+  /** Prefer light / white / gold chest armor pixels; skip dark cable arms. */
+  function avgCellChestArmor(ix, iy, cellSize) {
+    const c = avgCell(ix, iy, cellSize);
+    if (!c) return null;
+    const luma = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+    const isGoldish = (c.r > 145 && c.g > 105 && c.b < c.r * 0.92 && (c.r + c.g) > c.b * 2.1);
+    const isLight = luma >= 118;
+    const isWhiteMetal = luma >= 150 && Math.abs(c.r - c.g) < 40 && Math.abs(c.g - c.b) < 45;
+    if (!(isLight || isGoldish || isWhiteMetal)) return null;
+    // Extra reject very dark / cold cable tones
+    if (luma < 100 && !isGoldish) return null;
+    return c;
+  }
+
+  /** Irregular white chest-plate bricks tracking torso queen draw transform. */
+  async function spawnL8Torso() {
+    if (!level().queenBoss || won || gameOver) return null;
+    if (l8SpawnBusy) return null;
+    l8SpawnBusy = true;
+    try {
+      await loadMechSrc('mech-level8-queen-torso.png', 1800);
+      const q = l8QueenDrawParams();
+      if (!q || !imgW || !imgH) return null;
+
+      const v0 = l8ChestV0;
+      const v1 = l8ChestV1;
+      const fit = q.dw / imgW;
+      const ox = q.dx;
+      const oy = q.dy;
+
+      originX = ox;
+      originY = oy;
+      fitScale = fit;
+
+      const TORSO_MIN = Math.max(MIN_BRICKS, 5000);
+      const TORSO_CAP = Math.max(MAX_BRICKS, 12000);
+      let localCell = 2;
+      let bestN = 0;
+      for (let c = 4; c >= 1; c--) {
+        const ccols = Math.ceil(imgW / c);
+        const iy0 = Math.floor((imgH * v0) / c);
+        const iy1 = Math.ceil((imgH * v1) / c);
+        let n = 0;
+        for (let iy = iy0; iy < iy1; iy++) {
+          for (let ix = 0; ix < ccols; ix++) {
+            if (avgCellChestArmor(ix, iy, c)) {
+              n++;
+              if (n >= TORSO_CAP) break;
+            }
+          }
+          if (n >= TORSO_CAP) break;
+        }
+        localCell = c;
+        bestN = n;
+        if (n >= TORSO_MIN) break;
+      }
+      console.log('[l8-torso] cell', localCell, 'estBricks', bestN, 'v', v0, v1, 'img', imgW, imgH);
+
+      const localCols = Math.ceil(imgW / localCell);
+      const localRows = Math.ceil(imgH / localCell);
+      const iy0 = Math.max(0, Math.floor((imgH * v0) / localCell));
+      const iy1 = Math.min(localRows, Math.ceil((imgH * v1) / localCell));
+      const localCellScreen = localCell * fit;
+      const localBrickPx = Math.max(2.2, localCellScreen + 0.55);
+      const localGrid = new Int32Array(localCols * localRows);
+      localGrid.fill(-1);
+
+      cell = localCell;
+      cols = localCols;
+      rows = localRows;
+      cellScreen = localCellScreen;
+      brickPx = localBrickPx;
+      grid = localGrid;
+      bricks = [];
+      minIy = localRows;
+      maxIy = 0;
+      // Keep rooftop ground for queen feet / bg; brick ground is local to structure
+      const savedGround = l8RooftopGroundY > 0 ? l8RooftopGroundY : (H * 0.88);
+      groundY = 0;
+
+      for (let iy = iy0; iy < iy1; iy++) {
+        for (let ix = 0; ix < cols; ix++) {
+          if (bricks.length >= TORSO_CAP) break;
+          const c = avgCellChestArmor(ix, iy, cell);
+          if (!c) continue;
+          minIy = Math.min(minIy, iy);
+          maxIy = Math.max(maxIy, iy);
+          const bx = originX + ix * cellScreen;
+          const by = originY + iy * cellScreen;
+          const br = {
+            ix, iy,
+            baseX: bx,
+            baseY: by,
+            x: bx,
+            y: by,
+            w: brickPx,
+            h: brickPx,
+            color: `rgb(${c.r},${c.g},${c.b})`,
+            hp: 1,
+            maxHp: 1,
+            alive: true,
+            falling: false,
+            settled: false,
+            vx: 0,
+            vy: 0,
+            l8u: (ix * cell) / imgW,
+            l8v: (iy * cell) / imgH,
+            l8uw: cell / imgW,
+            l8vh: cell / imgH,
+          };
+          groundY = Math.max(groundY, br.y + br.h);
+          grid[iy * cols + ix] = bricks.length;
+          bricks.push(br);
+        }
+      }
+      groundY += 0.5;
+      mergeIrregularBricks(0.28);
+      for (const br of bricks) {
+        br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
+        br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
+        br.l8uw = br.w / Math.max(1e-6, imgW * fitScale);
+        br.l8vh = br.h / Math.max(1e-6, imgH * fitScale);
+      }
+
+      brickLayer = document.createElement('canvas');
+      brickLayer.width = Math.floor(W * dpr);
+      brickLayer.height = Math.floor(H * dpr);
+      const lctx = brickLayer.getContext('2d');
+      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lctx.clearRect(0, 0, W, H);
+      for (const br of bricks) drawBrickToLayer(br);
+
+      structureCount = bricks.length;
+      structureStartCount = structureCount;
+      l8TorsoStartCount = structureCount;
+      structureDX = 0;
+      structureDVX = 0;
+      structureDY = 0;
+      structureDVY = 0;
+      structureAngle = 0;
+      structureAV = 0;
+      jumpPhase = 'ground';
+      jumpCooldown = 99;
+      jumpTargetDX = 0;
+      applyStructureOffset();
+
+      const S = captureStructure();
+      S.l8Torso = true;
+      // Playfield floor for falling bricks / queen feet / bg (not chest AABB)
+      S.l8PlayGroundY = savedGround;
+      S.groundY = savedGround;
+      groundY = savedGround;
+      structures = [S];
+      refreshTotalStructureCount();
+      aliveCount = bricks.length;
+      applyStructure(structures[0]);
+      groundY = savedGround;
+      syncL8TorsoToQueen();
+      // Start dual bouncing eye lasers
+      initL8TorsoBounceLasers();
+      updateHud();
+      bumpCam(4.5);
+      console.log('[l8-torso] bricks', bricks.length);
+      return S;
+    } finally {
+      l8SpawnBusy = false;
+    }
+  }
+
+  function syncL8TorsoToQueen() {
+    if (!level().queenBoss || l8Phase !== 'torso') return;
+    if (!structures.length) return;
+    const q = l8QueenDrawParams();
+    if (!q) return;
+    eachStructure((S) => {
+      if (!S || !S.l8Torso) return;
+      structureDX = q.dx - originX;
+      structureDY = q.dy - originY;
+      structureDVX = 0;
+      structureDVY = 0;
+      structureAngle = 0;
+      structureAV = 0;
+      applyStructureOffset();
+      if (S.l8PlayGroundY) groundY = S.l8PlayGroundY;
+    });
+  }
+
+  function initL8TorsoBounceLasers() {
+    l8Lasers = [];
+    for (let eyeIdx = 0; eyeIdx < 2; eyeIdx++) {
+      const e = l8EyeWorldPos(eyeIdx);
+      const ang = (eyeIdx === 0 ? 0.55 : 0.95) + (Math.random() - 0.5) * 0.35;
+      const spd = 1;
+      l8Lasers.push({
+        bounce: true,
+        eyeIdx,
+        x0: e.x, y0: e.y,
+        x1: e.x, y1: e.y,
+        dx: Math.cos(ang) * spd,
+        dy: Math.sin(ang) * spd,
+        t: 0,
+        dur: 1e9,
+        w: 8 + Math.random() * 3,
+        pts: [],
+      });
+    }
+  }
+
+  function rebuildL8BounceRay(L, maxBounces) {
+    const pts = [{ x: L.x0, y: L.y0 }];
+    let x = L.x0, y = L.y0;
+    let dx = L.dx, dy = L.dy;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const margin = 0.5;
+    for (let b = 0; b < maxBounces; b++) {
+      let tMin = Infinity;
+      let nx = dx, ny = dy;
+      // intersect screen edges
+      if (dx > 1e-8) {
+        const t = (W - margin - x) / dx;
+        if (t > 1e-4 && t < tMin) { tMin = t; nx = -Math.abs(dx); ny = dy; }
+      } else if (dx < -1e-8) {
+        const t = (margin - x) / dx;
+        if (t > 1e-4 && t < tMin) { tMin = t; nx = Math.abs(dx); ny = dy; }
+      }
+      if (dy > 1e-8) {
+        const t = (H - margin - y) / dy;
+        if (t > 1e-4 && t < tMin) { tMin = t; nx = dx; ny = -Math.abs(dy); }
+      } else if (dy < -1e-8) {
+        const t = (margin - y) / dy;
+        if (t > 1e-4 && t < tMin) { tMin = t; nx = dx; ny = Math.abs(dy); }
+      }
+      if (!Number.isFinite(tMin) || tMin > 1e6) {
+        pts.push({ x: x + dx * Math.max(W, H) * 2, y: y + dy * Math.max(W, H) * 2 });
+        break;
+      }
+      x += dx * tMin;
+      y += dy * tMin;
+      x = Math.max(margin, Math.min(W - margin, x));
+      y = Math.max(margin, Math.min(H - margin, y));
+      pts.push({ x, y });
+      dx = nx; dy = ny;
+      // tiny nudge off wall so next bounce progresses
+      x += dx * 0.35;
+      y += dy * 0.35;
+    }
+    L.pts = pts;
+    if (pts.length >= 2) {
+      L.x1 = pts[1].x;
+      L.y1 = pts[1].y;
+    }
+  }
+
   function l8EyeWorldPos(which) {
     const q = l8QueenDrawParams();
     if (!q) return { x: W * 0.5, y: H * 0.12 };
@@ -2468,8 +2841,17 @@
       { u: 0.406, v: 0.098 },
       { u: 0.449, v: 0.095 },
     ];
-    const useUnder = (l8Phase === 'head' || l8Phase === 'flash' || l8EyeFlashT > 0);
-    const eyes = useUnder ? underEyes : armoredEyes;
+    // Torso sprites (outer): start ~L 0.40/0.18 R 0.49/0.18 — refine via red pixels if needed
+    const torsoEyes = [
+      { u: 0.402, v: 0.181 },
+      { u: 0.488, v: 0.175 },
+    ];
+    let eyes;
+    if (l8Phase === 'torso') eyes = torsoEyes;
+    else {
+      const useUnder = (l8Phase === 'head' || l8Phase === 'flash' || l8EyeFlashT > 0);
+      eyes = useUnder ? underEyes : armoredEyes;
+    }
     const e = eyes[(which | 0) % eyes.length];
     return { x: q.dx + e.u * q.dw, y: q.dy + e.v * q.dh };
   }
@@ -2491,7 +2873,7 @@
       w: paddle.w,
       h: paddle.h,
     };
-    // Thick beam: sample distance from paddle AABB (center + corners) to segment
+    // Thick beam: sample distance from paddle AABB (center + corners) to segment(s)
     const halfW = Math.max(10, L.w * 0.5);
     const cx = pad.x + pad.w / 2;
     const cy = pad.y + pad.h / 2;
@@ -2504,32 +2886,61 @@
       [cx, pad.y],
       [cx, pad.y + pad.h],
     ];
-    for (const [px, py] of samples) {
-      if (distPointToSegment(px, py, L.x0, L.y0, L.x1, L.y1) <= halfW + 4) return true;
+    const segs = [];
+    if (L.bounce && L.pts && L.pts.length >= 2) {
+      for (let i = 0; i < L.pts.length - 1; i++) {
+        segs.push([L.pts[i].x, L.pts[i].y, L.pts[i + 1].x, L.pts[i + 1].y]);
+      }
+    } else {
+      segs.push([L.x0, L.y0, L.x1, L.y1]);
     }
-    // Also: segment vs expanded AABB (Liang-Barsky-ish via endpoints + mid)
-    const ex = pad.x - halfW, ey = pad.y - halfW;
-    const ew = pad.w + halfW * 2, eh = pad.h + halfW * 2;
-    const pts = [[L.x0, L.y0], [L.x1, L.y1], [(L.x0 + L.x1) / 2, (L.y0 + L.y1) / 2]];
-    for (const [px, py] of pts) {
-      if (px >= ex && px <= ex + ew && py >= ey && py <= ey + eh) return true;
+    for (const [x0, y0, x1, y1] of segs) {
+      for (const [px, py] of samples) {
+        if (distPointToSegment(px, py, x0, y0, x1, y1) <= halfW + 4) return true;
+      }
+      const ex = pad.x - halfW, ey = pad.y - halfW;
+      const ew = pad.w + halfW * 2, eh = pad.h + halfW * 2;
+      const pts = [[x0, y0], [x1, y1], [(x0 + x1) / 2, (y0 + y1) / 2]];
+      for (const [px, py] of pts) {
+        if (px >= ex && px <= ex + ew && py >= ey && py <= ey + eh) return true;
+      }
     }
     return false;
   }
 
-  function damageFromL8EyeLaser(dt) {
+  function damageFromL8EyeLaser(dt, discreteHalf) {
     // Shield blocks the beam for a short grace after consuming one charge
     if (window.__l8LaserShieldUntil && performance.now() < window.__l8LaserShieldUntil) {
       return;
     }
+    if (discreteHalf) {
+      if (window.__l8LaserImmuneUntil && performance.now() < window.__l8LaserImmuneUntil) {
+        return;
+      }
+    }
     if (shieldCharges > 0) {
       shieldCharges--;
       window.__l8LaserShieldUntil = performance.now() + 900;
+      if (discreteHalf) window.__l8LaserImmuneUntil = performance.now() + 700;
       triggerHurtFX(false);
       updateHud();
       return;
     }
-    const dmg = dt * 0.5; // 0.5 heart per second of contact
+    if (discreteHalf) {
+      // Torso bounce lasers: −½ heart once, then ~0.7s immunity
+      lives = Math.max(0, +(lives - 0.5).toFixed(2));
+      window.__l8LaserImmuneUntil = performance.now() + 700;
+      triggerHurtFX(true);
+      bumpCam(2.4);
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Láser!</strong><span>−½ corazón</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => { if (!gameOver && !paused) hint.classList.remove('show'); }, 900);
+      updateHud();
+      checkGameOver();
+      return;
+    }
+    const dmg = dt * 0.5; // 0.5 heart per second of contact (head phase)
     lives = Math.max(0, +(lives - dmg).toFixed(3));
     if (!window.__l8LaserHurtT || performance.now() - window.__l8LaserHurtT > 180) {
       window.__l8LaserHurtT = performance.now();
@@ -2541,60 +2952,86 @@
   }
 
   function updateL8EyeLasers(dt) {
-    if (!level().queenBoss || l8Phase !== 'head') return;
+    if (!level().queenBoss) return;
     if (won || gameOver || outro || l8SpawnBusy) return;
 
-    // Stop lasers permanently once ≥70% head bricks destroyed
-    if (!l8LasersDone && l8HeadStartCount > 0) {
-      const live = countAliveStructureBricks();
-      const destroyed = l8HeadStartCount - live;
-      if (destroyed / l8HeadStartCount >= 0.70) {
-        l8LasersDone = true;
-        l8Lasers = [];
+    // HEAD: brief diagonal lasers → at ≥70% destroy begin torso (not forever-stop)
+    if (l8Phase === 'head') {
+      if (!l8LasersDone && l8HeadStartCount > 0) {
+        const live = countAliveStructureBricks();
+        const destroyed = l8HeadStartCount - live;
+        if (destroyed / l8HeadStartCount >= 0.70) {
+          beginL8TorsoPhase();
+          return;
+        }
       }
+
+      for (const L of l8Lasers) {
+        if (L.eyeIdx != null) {
+          const e = l8EyeWorldPos(L.eyeIdx);
+          L.x0 = e.x; L.y0 = e.y;
+        }
+        L.t += dt;
+        if (
+          !paused && !gameOver && !won && launched &&
+          L.t < L.dur && l8LaserHitsPaddle(L)
+        ) {
+          damageFromL8EyeLaser(dt, false);
+        }
+      }
+      l8Lasers = l8Lasers.filter((L) => L.t < L.dur);
+
+      if (paused || !launched) return;
+
+      l8LaserCd -= dt;
+      if (l8LaserCd <= 0 && l8Lasers.length === 0) {
+        const eyeIdx = Math.random() < 0.5 ? 0 : 1;
+        const e = l8EyeWorldPos(eyeIdx);
+        const targetX = Math.random() * W;
+        let targetY = paddle
+          ? paddle.y + paddle.h * (0.15 + Math.random() * 0.7)
+          : H * (0.84 + Math.random() * 0.12);
+        targetY = Math.max(targetY, e.y + H * 0.35);
+        targetY = Math.min(H * 0.98, targetY);
+        const dur = 0.65 + Math.random() * 0.5;
+        l8Lasers.push({
+          x0: e.x, y0: e.y,
+          x1: targetX, y1: targetY,
+          t: 0, dur,
+          w: 7 + Math.random() * 5,
+          eyeIdx,
+        });
+        l8LaserCd = 1.55 + Math.random() * 1.4;
+        bumpCam(1.4);
+      }
+      return;
     }
 
-    // Refresh beam origins to follow queen sway while active
+    // TORSO: two permanent bouncing beams from eyes
+    if (l8Phase !== 'torso') return;
+    if (!l8Lasers.length) initL8TorsoBounceLasers();
+
     for (const L of l8Lasers) {
+      if (!L.bounce) continue;
       if (L.eyeIdx != null) {
         const e = l8EyeWorldPos(L.eyeIdx);
         L.x0 = e.x; L.y0 = e.y;
       }
+      // Slight random drift of direction over time
+      L.dx += (Math.random() - 0.5) * 0.55 * dt;
+      L.dy += (Math.random() - 0.5) * 0.55 * dt;
+      const sp = Math.hypot(L.dx, L.dy) || 1;
+      L.dx /= sp; L.dy /= sp;
+      // Prefer somewhat downward so beams sweep the playfield
+      if (L.dy < 0.15) L.dy += 0.35 * dt;
+      rebuildL8BounceRay(L, 6);
       L.t += dt;
       if (
         !paused && !gameOver && !won && launched &&
-        L.t < L.dur && l8LaserHitsPaddle(L)
+        l8LaserHitsPaddle(L)
       ) {
-        damageFromL8EyeLaser(dt);
+        damageFromL8EyeLaser(dt, true);
       }
-    }
-    l8Lasers = l8Lasers.filter((L) => L.t < L.dur);
-
-    if (l8LasersDone) return;
-    if (paused || !launched) return;
-
-    l8LaserCd -= dt;
-    if (l8LaserCd <= 0 && l8Lasers.length === 0) {
-      const eyeIdx = Math.random() < 0.5 ? 0 : 1;
-      const e = l8EyeWorldPos(eyeIdx);
-      // Siempre diagonal hacia abajo; X al azar en la franja inferior
-      const targetX = Math.random() * W;
-      let targetY = paddle
-        ? paddle.y + paddle.h * (0.15 + Math.random() * 0.7)
-        : H * (0.84 + Math.random() * 0.12);
-      // Garantizar que el rayo baje desde el ojo
-      targetY = Math.max(targetY, e.y + H * 0.35);
-      targetY = Math.min(H * 0.98, targetY);
-      const dur = 0.65 + Math.random() * 0.5; // ~0.65–1.15s
-      l8Lasers.push({
-        x0: e.x, y0: e.y,
-        x1: targetX, y1: targetY,
-        t: 0, dur,
-        w: 7 + Math.random() * 5,
-        eyeIdx,
-      });
-      l8LaserCd = 1.55 + Math.random() * 1.4; // ~1.5–3s
-      bumpCam(1.4);
     }
   }
 
@@ -2606,34 +3043,43 @@
         const e = l8EyeWorldPos(L.eyeIdx);
         L.x0 = e.x; L.y0 = e.y;
       }
-      const u = L.t / Math.max(1e-6, L.dur);
-      const fade = u < 0.12 ? u / 0.12 : (u > 0.85 ? (1 - u) / 0.15 : 1);
+      if (L.bounce) rebuildL8BounceRay(L, 6);
+      const u = L.bounce ? 0.5 : (L.t / Math.max(1e-6, L.dur));
+      const fade = L.bounce ? 1 : (u < 0.12 ? u / 0.12 : (u > 0.85 ? (1 - u) / 0.15 : 1));
       const pulse = 0.75 + 0.25 * Math.sin(performance.now() * 0.04);
       const a = fade * pulse;
+      const segs = [];
+      if (L.bounce && L.pts && L.pts.length >= 2) {
+        for (let i = 0; i < L.pts.length - 1; i++) {
+          segs.push([L.pts[i].x, L.pts[i].y, L.pts[i + 1].x, L.pts[i + 1].y]);
+        }
+      } else {
+        segs.push([L.x0, L.y0, L.x1, L.y1]);
+      }
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       ctx.lineCap = 'round';
-      // Outer glow
-      ctx.strokeStyle = `rgba(255,40,50,${0.22 * a})`;
-      ctx.lineWidth = L.w * 3.2;
-      ctx.beginPath();
-      ctx.moveTo(L.x0, L.y0);
-      ctx.lineTo(L.x1, L.y1);
-      ctx.stroke();
-      // Mid
-      ctx.strokeStyle = `rgba(255,60,70,${0.55 * a})`;
-      ctx.lineWidth = L.w * 1.6;
-      ctx.beginPath();
-      ctx.moveTo(L.x0, L.y0);
-      ctx.lineTo(L.x1, L.y1);
-      ctx.stroke();
-      // Core
-      ctx.strokeStyle = `rgba(255,200,200,${0.95 * a})`;
-      ctx.lineWidth = Math.max(2, L.w * 0.45);
-      ctx.beginPath();
-      ctx.moveTo(L.x0, L.y0);
-      ctx.lineTo(L.x1, L.y1);
-      ctx.stroke();
+      ctx.lineJoin = 'round';
+      for (const [x0, y0, x1, y1] of segs) {
+        ctx.strokeStyle = `rgba(255,40,50,${0.22 * a})`;
+        ctx.lineWidth = L.w * 3.2;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(255,60,70,${0.55 * a})`;
+        ctx.lineWidth = L.w * 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(255,200,200,${0.95 * a})`;
+        ctx.lineWidth = Math.max(2, L.w * 0.45);
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      }
       // Eye bloom
       ctx.fillStyle = `rgba(255,30,45,${0.55 * a})`;
       ctx.beginPath();
@@ -2844,12 +3290,14 @@
     const step = dt * 60;
     const debrisActive = !paused && !gameOver && !won && !outro && l8Phase !== 'idle';
     // Moderate spawn rate — rains during intro + hands (even if ball on paddle)
-    if ((l8Phase === 'hands' || l8Phase === 'head' || l8Intro || l8Phase === 'intro') && debrisActive) {
+    if ((l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso' || l8Intro || l8Phase === 'intro') && debrisActive) {
       l8DebrisTimer -= dt;
       if (l8DebrisTimer <= 0) {
         spawnL8Debris();
-        if (Math.random() < 0.28) spawnL8Debris();
-        l8DebrisTimer = (l8Intro ? 1.2 : 0.85) + Math.random() * (l8Intro ? 1.4 : 1.35);
+        if (Math.random() < (l8Phase === 'torso' ? 0.45 : 0.28)) spawnL8Debris();
+        if (l8Phase === 'torso' && Math.random() < 0.35) spawnL8Debris();
+        l8DebrisTimer = (l8Intro ? 1.2 : (l8Phase === 'torso' ? 0.45 : 0.85))
+          + Math.random() * (l8Intro ? 1.4 : (l8Phase === 'torso' ? 0.7 : 1.35));
       }
     }
     // Debris passes through hands — only ball + paddle. Floor = bottom of screen.
@@ -3041,6 +3489,7 @@
       minIy = 0; maxIy = 0;
       // Screen ground line near lower playfield; bg groundFrac aligns rooftop floor
       groundY = H * 0.88;
+      l8RooftopGroundY = groundY;
       grid = new Int32Array(1); grid[0] = -1;
       brickLayer = makeBrickLayerCanvas();
       structureCount = 0;
@@ -3092,6 +3541,25 @@
         speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult(),
       };
       stickBallToPaddle();
+      if (l8BootSkipToTorso) {
+        // Atajo de prueba: sin intro/manos/cabeza → directo a torso
+        l8Intro = false;
+        l8IntroT = 999;
+        l8CamY = 1;
+        l8HandsSpawned = 2;
+        l8HandSpawnAt = 0;
+        l8Phase = 'head'; // beginL8TorsoPhase accepts from head
+        l8EyeFlashT = 0;
+        l8HeadStartCount = 0;
+        l8TorsoStartCount = 0;
+        l8Lasers = [];
+        l8LaserCd = 0;
+        l8LasersDone = false;
+        updateHud();
+        running = true;
+        beginL8TorsoPhase();
+        return;
+      }
       if (l8BootSkipToHead) {
         // Atajo de prueba: sin intro ni manos → directo a cabeza
         l8Intro = false;
@@ -4493,6 +4961,8 @@
         eachStructure(() => updateL8HandAI(dt));
       } else if (l8Phase === 'head') {
         syncL8HeadToQueen();
+      } else if (l8Phase === 'torso') {
+        syncL8TorsoToQueen();
       }
       return;
     }
@@ -4671,8 +5141,37 @@
     if (level().queenBoss && l8EyeFlashT > 0) {
       l8EyeFlashT = Math.max(0, l8EyeFlashT - dt);
     }
-    if (level().queenBoss && l8Phase === 'head') {
+    if (level().queenBoss && (l8Phase === 'head' || l8Phase === 'torso')) {
       updateL8EyeLasers(dt);
+    }
+    if (level().queenBoss && l8Phase === 'torso' && !paused && !won && !gameOver) {
+      // Earthquake: periodic cam bumps + extra floating dust
+      l8TorsoQuakeT -= dt;
+      if (l8TorsoQuakeT <= 0) {
+        bumpCam(2.2 + Math.random() * 3.5);
+        l8TorsoQuakeT = 0.18 + Math.random() * 0.35;
+      }
+      if (Math.random() < dt * 8) {
+        l8ExtraDust.push({
+          x: Math.random() * W,
+          y: H * (0.15 + Math.random() * 0.75),
+          r: 0.8 + Math.random() * 3.2,
+          vx: (Math.random() - 0.5) * 1.2,
+          vy: -0.2 - Math.random() * 0.8,
+          a: 0.25 + Math.random() * 0.45,
+          life: 0.8 + Math.random() * 1.4,
+        });
+      }
+      for (let i = l8ExtraDust.length - 1; i >= 0; i--) {
+        const p = l8ExtraDust[i];
+        p.life -= dt;
+        p.x += p.vx * dt * 60;
+        p.y += p.vy * dt * 60;
+        p.vy += 0.01 * dt * 60;
+        p.a *= 0.992;
+        if (p.life <= 0 || p.a < 0.02) l8ExtraDust.splice(i, 1);
+      }
+      if (l8ExtraDust.length > 120) l8ExtraDust.splice(0, l8ExtraDust.length - 120);
     }
     if (l6Transit) {
       updateBg(dt);
@@ -5290,7 +5789,9 @@
       const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
       // Align cracked rooftop floor (groundFrac) with queen feet / groundY
       const groundFrac = level().groundFrac != null ? level().groundFrac : 0.82;
-      const gy = groundY > 0 ? groundY : H * 0.88;
+      const gy = (l8RooftopGroundY > 0)
+        ? l8RooftopGroundY
+        : (groundY > 0 ? groundY : H * 0.88);
       const needH = Math.max(H * 1.25, (gy + H * 0.35) / groundFrac);
       const scale = Math.max(W / iw, needH / ih) * 1.12;
       const dw = iw * scale, dh = ih * scale;
@@ -5393,7 +5894,8 @@
   }
 
   function bumpCam(amount) {
-    camShake = Math.min(18, camShake + amount * 1.3);
+    const cap = (level().queenBoss && l8Phase === 'torso') ? 28 : 18;
+    camShake = Math.min(cap, camShake + amount * 1.3);
   }
 
   function drawOneBrickLayer(layerCanvas) {
@@ -5432,7 +5934,10 @@
     ctx.clearRect(0, 0, W, H);
 
     // Cámara inquieta: temblor base + picos con impacto
-    const rest = paused ? 0.2 : 0.72; // +30% inquietud base
+    // Torso phase = earthquake (much stronger resting shake)
+    const rest = paused
+      ? 0.2
+      : (level().queenBoss && l8Phase === 'torso' ? 4.6 : 0.72);
     const amp = rest + camShake;
     const t = performance.now() * 0.001;
     let ox = Math.sin(t * 17.3) * amp * 0.35 + Math.sin(t * 41.1) * amp * 0.18;
@@ -5441,8 +5946,8 @@
     let sx = 1, sy = 1;
 
     // L8 intro: slight zoom-in as we rise to the Queen's face
-    if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'hands' || l8Phase === 'head')) {
-      const z = 1 + (l8Intro ? l8CamY * 0.04 : 0.045);
+    if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso')) {
+      const z = 1 + (l8Intro ? l8CamY * 0.04 : (l8Phase === 'torso' ? 0.03 : 0.045));
       sx *= z; sy *= z;
       // Extra upward feel while rising (world slides down a touch)
       if (l8Intro) oy -= (1 - l8CamY) * 10;
@@ -5472,6 +5977,14 @@
     ctx.translate(-W / 2, -H / 2);
 
     drawBackground();
+    if (level().queenBoss && l8Phase === 'torso' && l8ExtraDust.length) {
+      for (const p of l8ExtraDust) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(210, 175, 120, ${p.a * 0.7})`;
+        ctx.fill();
+      }
+    }
     if (level().queenBoss) drawL8Queen();
     if (!level().queenBoss) drawGround();
     if (!level().fly) {
@@ -5629,6 +6142,17 @@
           loads.push(loadBgSrc(level().bgC).then((c) => { bgImgC = c; }).catch(() => {}));
         } else {
           bgImgC = null;
+        }
+        if (level().queenBoss) {
+          l8BgRooftopImg = img;
+          loads.push(
+            loadBgSrc('bg-level8-torso.jpg')
+              .then((t) => { l8BgTorsoImg = t; })
+              .catch(() => { l8BgTorsoImg = null; })
+          );
+        } else {
+          l8BgRooftopImg = null;
+          l8BgTorsoImg = null;
         }
         if (loads.length) Promise.all(loads).then(() => resolve());
         else resolve();
