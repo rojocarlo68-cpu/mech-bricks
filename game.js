@@ -280,6 +280,7 @@
   let l8HeadStartCount = 0;
   let l8TorsoStartCount = 0;
   let l8TorsoStage = 'chest'; // chest | armor (resto de armadura blanca)
+  let l8Finale = null; // { t, stage, zoom, cam, shake, boomCd, booms } cinemática final
   let l8HeadFrac = 0.132; // solo corona+cara (antes de hombros/pecho) // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
   let l8TorsoHeadFrac = 0.13; // cabeza visible (capa de abajo)
   let l8ChestV0 = 0.13; // bajo la cabeza
@@ -1188,6 +1189,7 @@
 
   function maybeWin() {
     if (won || gameOver || outro === 'done' || l6Transit) return;
+    if (l8Finale) return;
     // L8: no win during intro / before both hands / during head spawn
     if (level().queenBoss) {
       if (l8Intro || l8Phase === 'intro' || l8Phase === 'idle') return;
@@ -2231,6 +2233,7 @@
     l8HeadStartCount = 0;
     l8TorsoStartCount = 0;
     l8TorsoStage = 'chest';
+    l8Finale = null;
     l8Lasers = [];
     l8LaserCd = 0;
     l8LasersDone = false;
@@ -2911,7 +2914,7 @@
         }
       }
       groundY += 0.5;
-      mergeIrregularBricks(0.22);
+      // SIN merge: mergeIrregularBricks dejaba ~200 paneles enormes
       for (const br of bricks) {
         br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
         br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
@@ -2925,7 +2928,13 @@
       const lctx = brickLayer.getContext('2d');
       lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       lctx.clearRect(0, 0, W, H);
-      for (const br of bricks) drawBrickToLayer(br);
+      // Dibujo en lote (más barato que drawBrickToLayer ×7000)
+      for (const br of bricks) {
+        if (!br.alive) continue;
+        const lx = br.baseX, ly = br.baseY;
+        lctx.fillStyle = br.color;
+        lctx.fillRect(lx - 0.35, ly - 0.35, br.w + 0.7, br.h + 0.7);
+      }
 
       structureCount = bricks.length;
       structureStartCount = structureCount;
@@ -2983,23 +2992,20 @@
     });
   }
 
-  /** Resto de armadura blanca (fuera del pecho ya destruido). */
+  /** Armadura blanca restante (vestido completo; sin merge agresivo). */
   function avgCellRestArmor(ix, iy, cellSize) {
     const v = ((iy + 0.5) * cellSize) / Math.max(1, imgH);
-    // Excluir franja de pecho ya limpiada
-    if (v >= l8ChestV0 && v <= l8ChestV1) return null;
-    // Evitar zona de cabeza vacía de la capa outer
-    if (v < 0.02) return null;
+    // Outer no tiene cabeza; evitar franja vacía superior
+    if (v < 0.06) return null;
     const u = ((ix + 0.5) * cellSize) / Math.max(1, imgW);
-    if (u < 0.04 || u > 0.96) return null;
+    if (u < 0.03 || u > 0.97) return null;
     const c = avgCell(ix, iy, cellSize);
     if (!c) return null;
     const luma = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
-    const isGoldish = (c.r > 145 && c.g > 105 && c.b < c.r * 0.92 && (c.r + c.g) > c.b * 2.1);
-    const isLight = luma >= 118;
-    const isWhiteMetal = luma >= 145 && Math.abs(c.r - c.g) < 45 && Math.abs(c.g - c.b) < 50;
-    // Falda/forro rojizo oscuro no cuenta como armadura blanca
-    const isDarkRedLining = (c.r > 70 && c.r > c.g * 1.35 && c.r > c.b * 1.35 && luma < 110);
+    const isGoldish = (c.r > 140 && c.g > 100 && c.b < c.r * 0.95 && (c.r + c.g) > c.b * 2.0);
+    const isLight = luma >= 105;
+    const isWhiteMetal = luma >= 135 && Math.abs(c.r - c.g) < 50 && Math.abs(c.g - c.b) < 55;
+    const isDarkRedLining = (c.r > 70 && c.r > c.g * 1.35 && c.r > c.b * 1.35 && luma < 105);
     if (isDarkRedLining) return null;
     if (!(isLight || isGoldish || isWhiteMetal)) return null;
     return c;
@@ -3080,12 +3086,12 @@
       originY = oy;
       fitScale = fit;
 
-      // Misma densidad visual que el pecho (revertido el “censurado”)
-      const ARMOR_MIN = 2800;
-      const ARMOR_CAP = 6500;
+      // Objetivo ≥7000 ladrillos chicos (sin merge que los “censura” a ~200)
+      const ARMOR_MIN = 7000;
+      const ARMOR_CAP = 7800;
       let localCell = 2;
       let bestN = 0;
-      for (let c = 4; c >= 1; c--) {
+      for (let c = 3; c >= 1; c--) {
         const ccols = Math.ceil(imgW / c);
         const crows = Math.ceil(imgH / c);
         let n = 0;
@@ -4403,8 +4409,13 @@
   }
 
   function finishL8TorsoWinLight() {
+    beginL8FinaleCinematic();
+  }
+
+  /** Final L8: negro → zoom pecho → sube a cara (sacudida) → explosiones en el rostro. */
+  function beginL8FinaleCinematic() {
     if (won || gameOver || outro === 'done') return;
-    // Limpiar carga pesada YA
+    if (l8Finale) return;
     particles = [];
     bombs = [];
     playerBomb = null;
@@ -4414,6 +4425,7 @@
     bricks = [];
     structures = [];
     structureCount = 0;
+    structureStartCount = 0;
     grid = null;
     brickLayer = null;
     brickLayerLower = null;
@@ -4421,8 +4433,164 @@
     outro = null;
     outroT = 0;
     window.__outroDust = false;
-    camShake = Math.min(camShake, 2);
-    finishOutro();
+    launched = false;
+    if (ball) { ball.vx = 0; ball.vy = 0; }
+    camShake = 0;
+    l8Phase = 'torso';
+    l8TorsoStage = 'armor';
+    hint.classList.remove('show');
+    l8Finale = {
+      t: 0,
+      stage: 'black', // black | chest | rise | explode | done
+      stageT: 0,
+      zoom: 1,
+      cam: 0, // 0 pecho → 1 cara
+      shake: 0,
+      boomCd: 0,
+      booms: 0,
+      alpha: 0,
+    };
+    updateHud();
+  }
+
+  function updateL8Finale(dt) {
+    const F = l8Finale;
+    if (!F || F.stage === 'done') return;
+    F.t += dt;
+    F.stageT += dt;
+    if (ball && paddle) stickBallToPaddle();
+
+    if (F.stage === 'black') {
+      F.alpha = Math.min(1, F.stageT / 0.45);
+      if (F.stageT >= 0.55) {
+        F.stage = 'chest';
+        F.stageT = 0;
+        F.alpha = 1;
+        F.zoom = 1.15;
+        F.cam = 0;
+      }
+      return;
+    }
+    if (F.stage === 'chest') {
+      F.zoom = 1.15 + Math.min(1, F.stageT / 1.1) * 0.55;
+      F.cam = 0;
+      F.shake = 0.4;
+      if (F.stageT >= 1.25) {
+        F.stage = 'rise';
+        F.stageT = 0;
+      }
+      return;
+    }
+    if (F.stage === 'rise') {
+      const u = Math.min(1, F.stageT / 2.2);
+      F.cam = u * u * (3 - 2 * u); // smoothstep pecho→cara
+      F.zoom = 1.7 - u * 0.15;
+      F.shake = 1.2 + u * 3.5;
+      if (F.stageT >= 2.35) {
+        F.stage = 'explode';
+        F.stageT = 0;
+        F.boomCd = 0;
+        F.booms = 0;
+      }
+      return;
+    }
+    if (F.stage === 'explode') {
+      F.cam = 1;
+      F.zoom = 1.55;
+      F.shake = 4.5 + Math.sin(F.t * 28) * 1.2;
+      F.boomCd -= dt;
+      if (F.boomCd <= 0 && F.booms < 14) {
+        F.boomCd = 0.12 + Math.random() * 0.18;
+        F.booms++;
+        const q = l8FinaleQueenRect();
+        if (q) {
+          const fx = q.dx + q.dw * (0.28 + Math.random() * 0.44);
+          const fy = q.dy + q.dh * (0.02 + Math.random() * 0.22); // rostro
+          spawnDust(fx, fy, 'rgb(255,180,60)', 18, { spread: 1.8, up: 2.2, jitter: 12 });
+          spawnDust(fx, fy, 'rgb(255,80,30)', 14, { spread: 1.6, up: 1.8, jitter: 10 });
+          spawnDust(fx, fy, 'rgb(40,40,45)', 12, { spread: 1.5, up: 1.4, jitter: 14 });
+          bumpCam(2.2);
+        }
+      }
+      if (particles.length > 220) particles.splice(0, particles.length - 220);
+      // update particles lightly
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= dt;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        p.x += (p.vx || 0) * dt * 60;
+        p.y += (p.vy || 0) * dt * 60;
+        p.vy = (p.vy || 0) + 0.08 * dt * 60;
+      }
+      if (F.stageT >= 2.8) {
+        F.stage = 'done';
+        F.stageT = 0;
+        l8Finale = null;
+        finishOutro();
+      }
+    }
+  }
+
+  /** Rect de reina para cinemática: pecho(cam=0) → cara(cam=1) usando under (con cabeza). */
+  function l8FinaleQueenRect() {
+    const under = l8QueenTorsoUnderImg;
+    const outer = l8QueenTorsoImg;
+    const img = (under && under.naturalWidth) ? under : outer;
+    if (!img || !img.naturalWidth) return null;
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const F = l8Finale || { zoom: 1.4, cam: 0 };
+    const zoom = F.zoom || 1.4;
+    const cam = F.cam || 0;
+    // Encuadre pecho (centro ~0.32) → cara (~0.08)
+    const focusV = 0.34 + (0.09 - 0.34) * cam;
+    const baseScale = (H * 0.95 * zoom) / ih;
+    const dw = iw * baseScale;
+    const dh = ih * baseScale;
+    const dx = (W - dw) / 2;
+    const focusY = dh * focusV;
+    const dy = H * 0.42 - focusY;
+    return { dx, dy, dw, dh, img, outer, under };
+  }
+
+  function drawL8Finale() {
+    const F = l8Finale;
+    if (!F) return;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const q = l8FinaleQueenRect();
+    if (!q) return;
+    const sh = F.shake || 0;
+    const ox = Math.sin(performance.now() * 0.05) * sh * 0.9 + (Math.random() - 0.5) * sh * 0.8;
+    const oy = Math.cos(performance.now() * 0.06) * sh * 0.7 + (Math.random() - 0.5) * sh * 0.6;
+    ctx.save();
+    ctx.translate(ox, oy);
+    // Under (con cabeza) siempre
+    if (q.under && q.under.naturalWidth) {
+      ctx.drawImage(q.under, q.dx, q.dy, q.dw, q.dh);
+    } else if (q.img) {
+      ctx.drawImage(q.img, q.dx, q.dy, q.dw, q.dh);
+    }
+    // Outer armadura, pies alineados, se desvanece al subir a la cara
+    if (q.outer && q.outer.naturalWidth) {
+      const ow = q.outer.naturalWidth, oh = q.outer.naturalHeight;
+      const odw = q.dw;
+      const odh = oh * (q.dw / ow);
+      const odx = q.dx;
+      const ody = q.dy + q.dh - odh;
+      ctx.globalAlpha = Math.max(0.12, 1 - (F.cam || 0) * 0.92);
+      ctx.drawImage(q.outer, odx, ody, odw, odh);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+    for (const p of particles) {
+      const a = Math.max(0, Math.min(1, p.life / (p.maxLife || 0.6)));
+      ctx.globalAlpha = a;
+      ctx.fillStyle = `rgb(${(p.r)|0},${(p.g)|0},${(p.b)|0})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size || 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   function launch() {
@@ -5745,6 +5913,11 @@
     if (level().queenBoss && l8Phase === 'hands') {
       updateL8HandSpawns();
     }
+    if (l8Finale) {
+      updateL8Finale(dt);
+      updateHud();
+      return;
+    }
     if (level().queenBoss && l8Fade) {
       updateL8Fade(dt);
       // paddle track during fade
@@ -6650,6 +6823,7 @@
         ctx.fill();
       }
     }
+    if (l8Finale) { drawL8Finale(); return; }
     if (level().queenBoss) drawL8Queen();
     if (!level().queenBoss) drawGround();
     if (!level().fly) {
