@@ -6230,7 +6230,7 @@
       l8EyeFlashT = Math.max(0, l8EyeFlashT - dt);
     }
     if (level().queenBoss && (l8Phase === 'head' || l8Phase === 'torso')) {
-      updateL8EyeLasers(dt);
+      if (!(playerBomb && playerBomb.l8Ghost)) updateL8EyeLasers(dt);
     }
     if (level().queenBoss && l8Phase === 'torso' && !paused && !won && !gameOver) {
       // Drift lento al azar (lado a lado)
@@ -6400,10 +6400,10 @@
       if (paddleTrail[i].life <= 0) paddleTrail.splice(i, 1);
     }
 
-    updateFalling(dt);
+    if (!(playerBomb && playerBomb.l8Ghost)) updateFalling(dt);
 
     if (!launched) {
-      if (level().queenBoss) updateL8Debris(dt);
+      if (level().queenBoss && !(playerBomb && playerBomb.l8Ghost)) updateL8Debris(dt);
       updatePlayerBomb(dt);
       stickBallToPaddle();
       updateBallAirTrail(dt);
@@ -6426,8 +6426,22 @@
       updatePlayerBomb(dt);
     } else {
       bombs = []; // no enemy bombs on L8
-      updateL8Debris(dt);
-      updatePlayerBomb(dt); // shop bombs must still fly/detonate
+      // Si hay bomba fantasma L8, no simular debris (CPU)
+      if (!(playerBomb && playerBomb.l8Ghost)) updateL8Debris(dt);
+      updatePlayerBomb(dt);
+    }
+
+    // Bomba L8: no colisionar bola↔7000 ladrillos este frame (evita freeze al lanzar)
+    if (playerBomb && playerBomb.l8Ghost) {
+      if (ball) {
+        ball.x += ball.vx * dt * 60;
+        ball.y += ball.vy * dt * 60;
+        if (ball.x - ball.r < 0) { ball.x = ball.r; ball.vx = Math.abs(ball.vx); }
+        if (ball.x + ball.r > W) { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx); }
+        if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy = Math.abs(ball.vy); }
+      }
+      updateBallAirTrail(dt);
+      return;
     }
 
     const steps = 3;
@@ -6725,18 +6739,28 @@
 
   function updatePlayerBomb(dt) {
     if (!playerBomb || !playerBomb.alive) return;
-    playerBomb.t += dt;
-    playerBomb.x += playerBomb.vx * dt * 60;
-    playerBomb.y += playerBomb.vy * dt * 60;
-    // gravedad clara (antes 0.04 se sentía “colgada”)
-    playerBomb.vy += 0.12 * dt * 60;
+    const b = playerBomb;
+    b.t += dt;
+    b.x += b.vx * dt * 60;
+    b.y += b.vy * dt * 60;
+    b.vy += 0.12 * dt * 60;
 
-    if (playerBomb.x - playerBomb.r < 0) { playerBomb.x = playerBomb.r; playerBomb.vx = Math.abs(playerBomb.vx); }
-    if (playerBomb.x + playerBomb.r > W) { playerBomb.x = W - playerBomb.r; playerBomb.vx = -Math.abs(playerBomb.vx); }
-    if (playerBomb.y - playerBomb.r < 0) { playerBomb.y = playerBomb.r; playerBomb.vy = Math.abs(playerBomb.vy); }
+    if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx); }
+    if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx); }
+    if (b.y - b.r < 0) { b.y = b.r; b.vy = Math.abs(b.vy); }
+
+    // L8 torso ghost: solo vuela y detona por tiempo/altura — CERO hit-test de ladrillos
+    if (b.l8Ghost) {
+      if (b.t >= 0.55 || b.y < H * 0.36) {
+        const bx = b.x, by = b.y;
+        b.alive = false;
+        playerBomb = null;
+        detonateArmorBombFast(bx, by, (typeof EXPLODE_R === 'number' ? EXPLODE_R : 40) * 2);
+      }
+      return;
+    }
 
     // Rebote en la paleta
-    const b = playerBomb;
     if (
       paddle &&
       b.vy > 0 &&
@@ -6752,16 +6776,12 @@
       const sp = cur * 1.05;
       b.vx = Math.cos(ang) * sp;
       b.vy = Math.sin(ang) * sp;
-      spawnMetalSparks(b.x, paddle.y);
     }
 
-    // Detonate on first alive structure brick hit (no fuse timer)
     if (playerBombHitsStructureBrick(b)) {
-      b.phase = 'armed';
       const bx = b.x, by = b.y;
       const R = EXPLODE_R * 2.05;
       if (level().queenBoss && l8Phase === 'torso') {
-        // NUNCA explodeAt/fling aquí (7000 ladrillos = freeze)
         detonateArmorBombFast(bx, by, R * 1.05);
       } else {
         spawnShopBombBlast(bx, by);
@@ -6775,15 +6795,12 @@
       return;
     }
 
-    // Visual fuse only (never auto-detonates on timer)
-    if (playerBomb.phase === 'fuse' && playerBomb.t >= 3) {
-      playerBomb.phase = 'armed';
-      playerBomb.t = 0;
-      bumpCam(1.2);
+    if (b.phase === 'fuse' && b.t >= 3) {
+      b.phase = 'armed';
+      b.t = 0;
     }
-    // Leave screen → despawn without life penalty
-    if (playerBomb && playerBomb.y - playerBomb.r > H + 40) {
-      playerBomb.alive = false;
+    if (b.y - b.r > H + 40) {
+      b.alive = false;
       playerBomb = null;
     }
   }
@@ -6797,9 +6814,10 @@
     const size = b.r * (b.phase === 'armed' ? 3.4 : 3.0);
     if (img) {
       ctx.save();
-      if (b.phase === 'armed') {
+      // shadowBlur congela móviles; nunca en L8 / ghost
+      if (b.phase === 'armed' && !b.l8Ghost) {
         ctx.shadowColor = 'rgba(255,80,20,0.95)';
-        ctx.shadowBlur = 22;
+        ctx.shadowBlur = 14;
       }
       ctx.drawImage(img, b.x - size / 2, b.y - size / 2, size, size);
       ctx.restore();
@@ -7861,17 +7879,22 @@
       vy = -4.6;
     }
 
+    const l8TorsoBomb = !!(level().queenBoss && l8Phase === 'torso');
     playerBomb = {
       x, y, vx, vy,
       r: Math.max((ball && ball.r) ? ball.r * 1.15 : 8, 8),
       phase: 'fuse',
       t: 0,
       alive: true,
+      // Fantasma L8: no hace hit-test contra miles de ladrillos (eso congelaba al lanzar)
+      l8Ghost: l8TorsoBomb,
     };
     playerBombArmed = false;
     setBombButton(false);
     hint.classList.add('show');
-    hint.innerHTML = '<strong>💣 Bomba en camino</strong><span>Explota al tocar un ladrillo</span>';
+    hint.innerHTML = l8TorsoBomb
+      ? '<strong>💣 Bomba</strong><span>Detona en el núcleo…</span>'
+      : '<strong>💣 Bomba en camino</strong><span>Explota al tocar un ladrillo</span>';
     clearTimeout(window.__hintHide);
     window.__hintHide = setTimeout(() => {
       if (!paused && !gameOver) hint.classList.remove('show');
