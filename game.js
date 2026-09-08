@@ -3080,12 +3080,12 @@
       originY = oy;
       fitScale = fit;
 
-      // Menos ladrillos / celdas más grandes → no congelar al entrar
-      const ARMOR_MIN = 120;
-      const ARMOR_CAP = 220;
-      let localCell = 4;
+      // Misma densidad visual que el pecho (revertido el “censurado”)
+      const ARMOR_MIN = 2800;
+      const ARMOR_CAP = 6500;
+      let localCell = 2;
       let bestN = 0;
-      for (let c = 14; c >= 8; c--) {
+      for (let c = 4; c >= 1; c--) {
         const ccols = Math.ceil(imgW / c);
         const crows = Math.ceil(imgH / c);
         let n = 0;
@@ -3159,7 +3159,7 @@
         }
       }
       groundY += 0.5;
-      // Sin merge en resto-armadura
+      mergeIrregularBricks(0.22);
       for (const br of bricks) {
         br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
         br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
