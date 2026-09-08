@@ -34,6 +34,21 @@
     if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'armor') s *= 0.98;
     return s;
   }
+  function isL8ArmorRest() {
+    return !!(level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'armor');
+  }
+  function rebuildBrickLayerAlive() {
+    if (!brickLayer) return;
+    try {
+      const lctx = brickLayer.getContext('2d');
+      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lctx.clearRect(0, 0, W, H);
+      for (const br of bricks) {
+        if (br.alive && !br.falling && !br.settled) drawBrickToLayer(br);
+      }
+    } catch (_) {}
+  }
+
   // ?level=2 para probar nivel 2 directo
   // ?level=8&phase=head — saltar a fase de cabeza (sin manos)
   // ?level=8&phase=torso — saltar a fase de torso (sin manos/cabeza)
@@ -3044,8 +3059,8 @@
       fitScale = fit;
 
       // Menos ladrillos / celdas más grandes → no congelar al entrar
-      const ARMOR_MIN = 900;
-      const ARMOR_CAP = 2800;
+      const ARMOR_MIN = 700;
+      const ARMOR_CAP = 1800;
       let localCell = 4;
       let bestN = 0;
       for (let c = 6; c >= 3; c--) {
@@ -4225,6 +4240,14 @@
 
   /** Explosión espectacular de bomba de tienda: fuego, humo, chispas, escombros. */
   function spawnShopBombBlast(x, y) {
+    // Fase resto-armadura: FX mínimo (la bomba full congela el teléfono)
+    if (isL8ArmorRest()) {
+      bumpCam(2.2);
+      spawnDust(x, y, 'rgb(255,160,60)', 14, { spread: 1.6, up: 2.0, jitter: 10 });
+      spawnDust(x, y, 'rgb(70,65,60)', 10, { spread: 1.4, up: 1.6, jitter: 12 });
+      if (particles.length > 260) particles.splice(0, particles.length - 260);
+      return;
+    }
     bumpCam(12);
     // Núcleo de fuego
     spawnDust(x, y, 'rgb(255,220,80)', 48, { spread: 2.8, up: 3.8, big: true, long: true, jitter: 18, hemisphere: true });
@@ -4263,6 +4286,8 @@
   }
 
   function flingBricksFromBlast(x, y, R) {
+    // Resto armadura: no simular vuelo de cientos de ladrillos
+    if (isL8ArmorRest()) return;
     const r2 = R * R;
     const fling = (list) => {
       for (const br of list) {
@@ -4302,6 +4327,43 @@
     };
     if (structures.length) eachStructure(() => fling(bricks));
     else fling(bricks);
+  }
+
+  /** Bomba en resto-armadura: mata en radio, un solo redibujo, sin FX pesados. */
+  function detonateArmorBombFast(x, y, R) {
+    bumpCam(2.8);
+    spawnDust(x, y, 'rgb(255,150,50)', 16, { spread: 1.5, up: 2.0, jitter: 10 });
+    spawnDust(x, y, 'rgb(70,65,60)', 12, { spread: 1.3, up: 1.5, jitter: 12 });
+    const r2 = R * R;
+    let hit = 0;
+    const run = () => {
+      for (let i = 0; i < bricks.length; i++) {
+        const br = bricks[i];
+        if (!br.alive || br.settled) continue;
+        const cx = br.x + br.w * 0.5;
+        const cy = br.y + br.h * 0.5;
+        const dx = cx - x, dy = cy - y;
+        if (dx * dx + dy * dy > r2) continue;
+        const wasStructure = !br.falling;
+        br.alive = false;
+        br.falling = false;
+        br.settled = false;
+        if (wasStructure && !br.panel) clearBrickGrid(br, i);
+        score += 1;
+        hit++;
+      }
+    };
+    if (structures.length) eachStructure(run);
+    else run();
+    rebuildBrickLayerAlive();
+    // Colapso en lote (sin marcar falling)
+    recomputeSupport();
+    rebuildBrickLayerAlive();
+    if (particles.length > 280) particles.splice(0, particles.length - 280);
+    refreshTotalStructureCount();
+    updateHud();
+    maybeWin();
+    return hit;
   }
 
   function launch() {
@@ -4627,6 +4689,31 @@
   }
 
   function explodeAtOnCurrent(x, y, R, pts, r2) {
+    // Armor rest: sin polvo por ladrillo ni draw N veces
+    if (isL8ArmorRest()) {
+      let hit = 0;
+      for (let i = 0; i < bricks.length; i++) {
+        const br = bricks[i];
+        if (!br.alive || br.settled) continue;
+        const cx = br.x + br.w * 0.5;
+        const cy = br.y + br.h * 0.5;
+        const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+        if (d2 > r2) continue;
+        const wasStructure = !br.falling;
+        br.alive = false;
+        br.falling = false;
+        br.settled = false;
+        if (wasStructure && !br.panel) clearBrickGrid(br, i);
+        score += pts;
+        hit++;
+      }
+      if (hit) {
+        rebuildBrickLayerAlive();
+        recomputeSupport();
+        rebuildBrickLayerAlive();
+      }
+      return hit;
+    }
     const hitList = [];
     for (const br of bricks) {
       if (!br.alive || br.settled) continue;
@@ -4659,15 +4746,21 @@
 
   function explodeAt(x, y, radius, ptsPerBrick) {
     const big = radius != null && radius > EXPLODE_R;
-    bumpCam(big ? 9.5 : 5.5);
+    const armor = isL8ArmorRest();
+    bumpCam(armor ? 2.5 : (big ? 9.5 : 5.5));
     const R = radius != null ? radius : EXPLODE_R;
     const pts = ptsPerBrick != null ? ptsPerBrick : 1;
     const r2 = R * R;
-    spawnDust(x, y, 'rgb(255,120,40)', big ? 64 : 40);
-    spawnDust(x, y, 'rgb(80,80,80)', big ? 44 : 24);
-    if (big) {
-      spawnDust(x, y, 'rgb(255,200,60)', 30, { spread: 2.4, up: 3.2, big: true, long: true, jitter: 14 });
-      spawnMetalSparks(x, y);
+    if (armor) {
+      spawnDust(x, y, 'rgb(255,140,50)', 14);
+      spawnDust(x, y, 'rgb(80,80,80)', 10);
+    } else {
+      spawnDust(x, y, 'rgb(255,120,40)', big ? 64 : 40);
+      spawnDust(x, y, 'rgb(80,80,80)', big ? 44 : 24);
+      if (big) {
+        spawnDust(x, y, 'rgb(255,200,60)', 30, { spread: 2.4, up: 3.2, big: true, long: true, jitter: 14 });
+        spawnMetalSparks(x, y);
+      }
     }
     if (structures.length) {
       eachStructure(() => explodeAtOnCurrent(x, y, R, pts, r2));
@@ -6072,11 +6165,16 @@
       b.phase = 'armed';
       const bx = b.x, by = b.y;
       const R = EXPLODE_R * 2.05;
-      spawnShopBombBlast(bx, by);
-      flingBricksFromBlast(bx, by, R);
-      explodeAt(bx, by, R, 1);
-      spawnShopBombBlast(bx, by - 8); // segunda oleada visual
-      bumpCam(6);
+      if (isL8ArmorRest()) {
+        // Ruta rápida: sin fling ni doble blast espectacular
+        detonateArmorBombFast(bx, by, R * 1.05);
+      } else {
+        spawnShopBombBlast(bx, by);
+        flingBricksFromBlast(bx, by, R);
+        explodeAt(bx, by, R, 1);
+        spawnShopBombBlast(bx, by - 8); // segunda oleada visual
+        bumpCam(6);
+      }
       b.alive = false;
       playerBomb = null;
       return;
