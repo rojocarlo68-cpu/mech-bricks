@@ -872,7 +872,7 @@
       collapseLayer('lower', ds.lower || 0);
       collapseLayer('upper', ds.upper || 0);
     } else if (localCount > 0 && structureStartCount > 0) {
-      const collapseAt = isL8ArmorRest() ? 0.40 : 0.50; // resto: -20% dureza
+      const collapseAt = isL8ArmorRest() ? 0.32 : 0.50; // resto: -20%×2 dureza
       if (localCount <= structureStartCount * collapseAt) collapseLayer(null, structureStartCount);
     }
     localCount = 0;
@@ -4899,7 +4899,7 @@
     }
     {
       let dmg = ballDamage() * (level().brickDamageMult || 1);
-      if (isL8ArmorRest()) dmg *= 1.25; // -20% dureza
+      if (isL8ArmorRest()) dmg *= 1.5625; // -20% y otro -20% dureza (0.8^2)
       br.hp -= dmg;
     }
     score += 1; // $1 por golpe
