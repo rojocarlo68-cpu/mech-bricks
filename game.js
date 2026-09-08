@@ -871,8 +871,9 @@
       const ds = window.__dualStart || {};
       collapseLayer('lower', ds.lower || 0);
       collapseLayer('upper', ds.upper || 0);
-    } else if (localCount > 0 && structureStartCount > 0 && localCount <= structureStartCount * 0.50) {
-      collapseLayer(null, structureStartCount);
+    } else if (localCount > 0 && structureStartCount > 0) {
+      const collapseAt = isL8ArmorRest() ? 0.40 : 0.50; // resto: -20% dureza
+      if (localCount <= structureStartCount * collapseAt) collapseLayer(null, structureStartCount);
     }
     localCount = 0;
     for (let i = 0; i < n; i++) {
@@ -4365,46 +4366,25 @@
     else fling(bricks);
   }
 
-  /** Bomba en resto-armadura: limpia TODO de golpe (0 simulación) y gana. */
+  /** Bomba en resto-armadura: limpia sin simular caídas → cinemática. */
   function detonateArmorBombFast(x, y, R) {
-    bumpCam(2.5);
-    spawnDust(x, y, 'rgb(255,160,60)', 10, { spread: 1.3, up: 1.6, jitter: 8 });
-    spawnDust(x, y, 'rgb(90,85,80)', 8, { spread: 1.2, up: 1.4, jitter: 10 });
-    for (let k = 0; k < 5; k++) {
-      spawnDust(
-        x + (Math.random() - 0.5) * 90,
-        y + (Math.random() - 0.5) * 120,
-        'rgb(210,210,220)',
-        6,
-        { spread: 1.4, up: 1.5, jitter: 12 }
-      );
-    }
-    let n = 0;
-    for (const br of bricks) {
-      if (!br.alive) continue;
-      br.alive = false;
-      br.falling = false;
-      br.settled = false;
-      n++;
-    }
+    bumpCam(2.2);
+    spawnDust(x, y, 'rgb(255,160,60)', 8, { spread: 1.2, up: 1.4, jitter: 8 });
+    spawnDust(x, y, 'rgb(90,85,80)', 6, { spread: 1.1, up: 1.2, jitter: 9 });
+    // Soltar referencias YA (no iterar 7000 para marcar alive=false)
+    const n = structureCount || bricks.length || 0;
     score += Math.min(400, n);
     bricks = [];
     structures = [];
     structureCount = 0;
     structureStartCount = 0;
     grid = null;
-    if (brickLayer) {
-      try {
-        const lctx = brickLayer.getContext('2d');
-        lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        lctx.clearRect(0, 0, W, H);
-      } catch (_) {}
-    }
     brickLayer = null;
-    if (particles.length > 120) particles = particles.slice(-120);
+    particles = particles.slice(-80);
     l8ExtraDust = [];
     updateHud();
-    setTimeout(() => finishL8TorsoWinLight(), 80);
+    // Cinemática en el siguiente tick (el frame del botón sigue fluido)
+    setTimeout(() => beginL8FinaleCinematic(), 30);
     return n;
   }
 
@@ -4872,7 +4852,7 @@
       let live = 0;
       for (const b of bricks) if (b.alive && !b.falling && !b.settled) live++;
       const start = structureStartCount || l8TorsoStartCount || 1;
-      if (live > 0 && live <= start * 0.55) {
+      if (live > 0 && live <= start * 0.40) {
         for (const b of bricks) {
           if (!b.alive) continue;
           b.alive = false;
@@ -4884,7 +4864,7 @@
       rebuildBrickLayerAlive();
       refreshTotalStructureCount();
       updateHud();
-      if (live <= 0) setTimeout(() => finishL8TorsoWinLight(), 40);
+      if (live <= 0) setTimeout(() => beginL8FinaleCinematic(), 40);
       else maybeWin();
     } else {
       drawBrickToLayer(br);
@@ -4917,7 +4897,11 @@
       }
       spawnMetalSparks(hx, hy);
     }
-    br.hp -= ballDamage() * (level().brickDamageMult || 1);
+    {
+      let dmg = ballDamage() * (level().brickDamageMult || 1);
+      if (isL8ArmorRest()) dmg *= 1.25; // -20% dureza
+      br.hp -= dmg;
+    }
     score += 1; // $1 por golpe
     if (br.hp <= 0) {
       destroyBrick(br, 0);
@@ -6341,25 +6325,32 @@
   }
 
   function playerBombHitsStructureBrick(b) {
-    // Resto-armadura: el pecho ya no tiene ladrillos → la bomba pasaba de largo.
-    // Detonar al entrar en el cuerpo de la reina (o rozar cualquier ladrillo).
+    // Resto-armadura: NUNCA AABB del cuerpo entero (la falda llega a la paleta →
+    // la bomba detonaba al nacer y congelaba con 7000 ladrillos).
+    // Solo grid local (barato) + un pelín de radio extra.
     if (isL8ArmorRest()) {
-      const q = l8QueenDrawParams();
-      if (q) {
-        const pad = Math.max(28, (b.r || 8) * 2.2);
-        if (
-          b.x + b.r > q.dx - pad &&
-          b.x - b.r < q.dx + q.dw + pad &&
-          b.y + b.r > q.dy + q.dh * 0.06 &&
-          b.y - b.r < q.dy + q.dh * 0.98
-        ) {
-          return true;
+      if (!b || (b.t != null && b.t < 0.12)) return false; // gracia al disparar
+      if (paddle && b.y > paddle.y - 36) return false; // aún cerca de la paleta
+      const ox = originX + structureDX;
+      const oy = originY + structureDY;
+      const cs = Math.max(1e-6, cellScreen || 8);
+      const rad = (b.r || 8) * 1.35;
+      const ix0 = Math.floor((b.x - rad - ox) / cs) - 1;
+      const iy0 = Math.floor((b.y - rad - oy) / cs) - 1;
+      const ix1 = Math.floor((b.x + rad - ox) / cs) + 1;
+      const iy1 = Math.floor((b.y + rad - oy) / cs) + 1;
+      const g = grid;
+      if (!g) return false;
+      for (let iy = iy0; iy <= iy1; iy++) {
+        if (iy < 0 || iy >= rows) continue;
+        for (let ix = ix0; ix <= ix1; ix++) {
+          if (ix < 0 || ix >= cols) continue;
+          const id = g[iy * cols + ix];
+          if (id < 0) continue;
+          const br = bricks[id];
+          if (!br || !br.alive || br.falling || br.settled) continue;
+          if (collideCircleAABB(b.x, b.y, rad, br)) return true;
         }
-      }
-      for (let i = 0; i < bricks.length; i++) {
-        const br = bricks[i];
-        if (!br.alive || br.falling || br.settled) continue;
-        if (collideCircleAABB(b.x, b.y, (b.r || 8) * 2.4, br)) return true;
       }
       return false;
     }
