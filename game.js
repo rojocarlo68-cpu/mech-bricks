@@ -6168,6 +6168,28 @@
   }
 
   function playerBombHitsStructureBrick(b) {
+    // Resto-armadura: el pecho ya no tiene ladrillos → la bomba pasaba de largo.
+    // Detonar al entrar en el cuerpo de la reina (o rozar cualquier ladrillo).
+    if (isL8ArmorRest()) {
+      const q = l8QueenDrawParams();
+      if (q) {
+        const pad = Math.max(28, (b.r || 8) * 2.2);
+        if (
+          b.x + b.r > q.dx - pad &&
+          b.x - b.r < q.dx + q.dw + pad &&
+          b.y + b.r > q.dy + q.dh * 0.06 &&
+          b.y - b.r < q.dy + q.dh * 0.98
+        ) {
+          return true;
+        }
+      }
+      for (let i = 0; i < bricks.length; i++) {
+        const br = bricks[i];
+        if (!br.alive || br.falling || br.settled) continue;
+        if (collideCircleAABB(b.x, b.y, (b.r || 8) * 2.4, br)) return true;
+      }
+      return false;
+    }
     const tryHit = () => {
       if (level().panels) {
         for (let i = 0; i < bricks.length; i++) {
