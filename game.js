@@ -537,7 +537,11 @@
 
   function updateHud() {
     const unit = level().panels ? 'paneles' : 'ladrillos';
-    structureCount = countAliveStructureBricks();
+    // Con miles de ladrillos, no recontar cada frame (congela al spamear updateHud)
+    if (window.__hudBrickDirty || structureCount == null || bricks.length < 1200) {
+      structureCount = countAliveStructureBricks();
+      window.__hudBrickDirty = false;
+    }
     countEl.textContent = `${level().name} · ${structureCount} ${unit}`;
     const moneyTxt = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
     if (scoreEl) scoreEl.textContent = moneyTxt;
@@ -2984,17 +2988,22 @@
   function syncL8TorsoToQueen() {
     if (!level().queenBoss || l8Phase !== 'torso') return;
     if (!structures.length) return;
+    // Mientras vuela la bomba de tienda: no recolocar 7000 ladrillos/frame
+    if (playerBomb && playerBomb.alive) return;
     const q = l8QueenDrawParams();
     if (!q) return;
     eachStructure((S) => {
       if (!S || !S.l8Torso) return;
-      structureDX = q.dx - originX;
-      structureDY = q.dy - originY;
+      const ndx = q.dx - originX;
+      const ndy = q.dy - originY;
+      const moved = Math.abs(ndx - structureDX) > 0.6 || Math.abs(ndy - structureDY) > 0.6;
+      structureDX = ndx;
+      structureDY = ndy;
       structureDVX = 0;
       structureDVY = 0;
       structureAngle = 0;
       structureAV = 0;
-      applyStructureOffset();
+      if (moved) applyStructureOffset();
       if (S.l8PlayGroundY) groundY = S.l8PlayGroundY;
     });
   }
@@ -4372,25 +4381,29 @@
     else fling(bricks);
   }
 
-  /** Bomba en resto-armadura: limpia sin simular caídas → cinemática. */
+  /** Bomba L8 torso: soltar refs al instante → cinemática (0 simulación). */
   function detonateArmorBombFast(x, y, R) {
-    bumpCam(2.2);
-    spawnDust(x, y, 'rgb(255,160,60)', 8, { spread: 1.2, up: 1.4, jitter: 8 });
-    spawnDust(x, y, 'rgb(90,85,80)', 6, { spread: 1.1, up: 1.2, jitter: 9 });
-    // Soltar referencias YA (no iterar 7000 para marcar alive=false)
-    const n = structureCount || bricks.length || 0;
+    bumpCam(1.6);
+    spawnDust(x, y, 'rgb(255,160,60)', 6, { spread: 1.1, up: 1.2, jitter: 7 });
+    spawnDust(x, y, 'rgb(90,85,80)', 4, { spread: 1.0, up: 1.1, jitter: 8 });
+    const n = structureCount || (bricks && bricks.length) || 0;
     score += Math.min(400, n);
+    // Drop refs immediately (GC later) — no loops over 7000
     bricks = [];
     structures = [];
     structureCount = 0;
     structureStartCount = 0;
     grid = null;
     brickLayer = null;
-    particles = particles.slice(-80);
+    particles = [];
     l8ExtraDust = [];
+    window.__hudBrickDirty = true;
+    playerBomb = null;
     updateHud();
-    // Cinemática en el siguiente tick (el frame del botón sigue fluido)
-    setTimeout(() => beginL8FinaleCinematic(), 30);
+    setTimeout(() => {
+      try { beginL8FinaleCinematic(); }
+      catch (e) { console.warn(e); finishOutro(); }
+    }, 50);
     return n;
   }
 
@@ -5115,6 +5128,7 @@
 
   function destroyBrick(br, pts) {
     if (!br.alive || br.settled) return;
+    window.__hudBrickDirty = true;
     const wasStructure = !br.falling;
     br.alive = false;
     br.falling = false;
@@ -5169,7 +5183,7 @@
     spawnDust(hx, hy, br.color, br.hp <= 1 ? 14 : 8);
     spawnMetalSparks(hx, hy); // chispas metal-metal
     // Fase pecho: explosiones al azar al golpear armadura
-    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'chest' && Math.random() < 0.38) {
+    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'chest' && !(playerBomb && playerBomb.alive) && Math.random() < 0.38) {
       bumpCam(2.8 + Math.random() * 3.2);
       if (typeof spawnShopBombBlast === 'function') {
         spawnShopBombBlast(hx, hy);
@@ -6624,16 +6638,17 @@
   }
 
   function playerBombHitsStructureBrick(b) {
-    // Resto-armadura: NUNCA AABB del cuerpo entero (la falda llega a la paleta →
-    // la bomba detonaba al nacer y congelaba con 7000 ladrillos).
-    // Solo grid local (barato) + un pelín de radio extra.
-    if (isL8ArmorRest()) {
-      if (!b || (b.t != null && b.t < 0.12)) return false; // gracia al disparar
-      if (paddle && b.y > paddle.y - 36) return false; // aún cerca de la paleta
+    // L8 torso (pecho o resto): grid local + gracia larga (nunca AABB cuerpo).
+    if (level().queenBoss && l8Phase === 'torso') {
+      if (!b || (b.t != null && b.t < 0.35)) return false;
+      if (paddle && b.y > paddle.y - 70) return false;
+      // Throttle: 1 de cada 2 frames
+      b._hitSkip = !(b._hitSkip);
+      if (b._hitSkip) return false;
       const ox = originX + structureDX;
       const oy = originY + structureDY;
       const cs = Math.max(1e-6, cellScreen || 8);
-      const rad = (b.r || 8) * 1.35;
+      const rad = (b.r || 8) * 1.25;
       const ix0 = Math.floor((b.x - rad - ox) / cs) - 1;
       const iy0 = Math.floor((b.y - rad - oy) / cs) - 1;
       const ix1 = Math.floor((b.x + rad - ox) / cs) + 1;
@@ -6648,7 +6663,11 @@
           if (id < 0) continue;
           const br = bricks[id];
           if (!br || !br.alive || br.falling || br.settled) continue;
-          if (collideCircleAABB(b.x, b.y, rad, br)) return true;
+          // Usar base+offset (por si sync se saltó)
+          const bx = (br.baseX != null ? br.baseX : br.x) + structureDX;
+          const by = (br.baseY != null ? br.baseY : br.y) + structureDY;
+          const tmp = { x: bx, y: by, w: br.w, h: br.h };
+          if (collideCircleAABB(b.x, b.y, rad, tmp)) return true;
         }
       }
       return false;
@@ -6741,15 +6760,9 @@
       b.phase = 'armed';
       const bx = b.x, by = b.y;
       const R = EXPLODE_R * 2.05;
-      if (isL8ArmorRest()) {
+      if (level().queenBoss && l8Phase === 'torso') {
+        // NUNCA explodeAt/fling aquí (7000 ladrillos = freeze)
         detonateArmorBombFast(bx, by, R * 1.05);
-      } else if (level().queenBoss && l8Phase === 'torso') {
-        // Pecho: bomba ligera (sin fling ni doble blast)
-        bumpCam(3);
-        spawnDust(bx, by, 'rgb(255,150,50)', 16);
-        spawnDust(bx, by, 'rgb(70,65,60)', 12);
-        explodeAt(bx, by, R, 1);
-        if (particles.length > 220) particles.splice(0, particles.length - 220);
       } else {
         spawnShopBombBlast(bx, by);
         flingBricksFromBlast(bx, by, R);
@@ -7873,8 +7886,8 @@
       e.preventDefault();
       firePlayerBomb();
     };
+    // Solo pointerdown (click duplicaba el handler en desktop)
     btnBomb.addEventListener('pointerdown', onBombPress);
-    btnBomb.addEventListener('click', onBombPress);
   }
 
   (async function init() {
