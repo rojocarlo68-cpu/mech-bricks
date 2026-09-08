@@ -4512,22 +4512,26 @@
         F.stage = 'done';
         F.stageT = 0;
         l8Finale = null;
-        beginL8SkeletonCrumble();
+        // Handoff fuera del frame de update (evita perder el arranque)
+        setTimeout(() => {
+          Promise.resolve(beginL8SkeletonCrumble()).catch((e) => {
+            console.warn('l8 skeleton start', e);
+            finishOutro();
+          });
+        }, 40);
       }
     }
   }
 
-  /** Rect de reina para cinemática: pecho(cam=0) → cara(cam=1) usando under (con cabeza). */
+  /** Rect cinemática: SOLO capa de abajo (cables/esqueleto), sin armadura. */
   function l8FinaleQueenRect() {
-    const under = l8QueenTorsoUnderImg;
-    const outer = l8QueenTorsoImg;
-    const img = (under && under.naturalWidth) ? under : outer;
-    if (!img || !img.naturalWidth) return null;
-    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const under = l8QueenTorsoUnderImg || l8QueenSkeletonImg;
+    if (!under || !under.naturalWidth) return null;
+    const iw = under.naturalWidth, ih = under.naturalHeight;
     const F = l8Finale || { zoom: 1.4, cam: 0 };
     const zoom = F.zoom || 1.4;
     const cam = F.cam || 0;
-    // Encuadre pecho (centro ~0.32) → cara (~0.08)
+    // pecho (~0.34) → cara (~0.09)
     const focusV = 0.34 + (0.09 - 0.34) * cam;
     const baseScale = (H * 0.95 * zoom) / ih;
     const dw = iw * baseScale;
@@ -4535,7 +4539,7 @@
     const dx = (W - dw) / 2;
     const focusY = dh * focusV;
     const dy = H * 0.42 - focusY;
-    return { dx, dy, dw, dh, img, outer, under };
+    return { dx, dy, dw, dh, under };
   }
 
   function drawL8Finale() {
@@ -4544,30 +4548,15 @@
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
     const q = l8FinaleQueenRect();
-    if (!q) return;
-    const sh = F.shake || 0;
-    const ox = Math.sin(performance.now() * 0.05) * sh * 0.9 + (Math.random() - 0.5) * sh * 0.8;
-    const oy = Math.cos(performance.now() * 0.06) * sh * 0.7 + (Math.random() - 0.5) * sh * 0.6;
-    ctx.save();
-    ctx.translate(ox, oy);
-    // Under (con cabeza) siempre
-    if (q.under && q.under.naturalWidth) {
+    if (q && q.under) {
+      const sh = F.shake || 0;
+      const ox = Math.sin(performance.now() * 0.05) * sh * 0.9 + (Math.random() - 0.5) * sh * 0.8;
+      const oy = Math.cos(performance.now() * 0.06) * sh * 0.7 + (Math.random() - 0.5) * sh * 0.6;
+      ctx.save();
+      ctx.translate(ox, oy);
       ctx.drawImage(q.under, q.dx, q.dy, q.dw, q.dh);
-    } else if (q.img) {
-      ctx.drawImage(q.img, q.dx, q.dy, q.dw, q.dh);
+      ctx.restore();
     }
-    // Outer armadura, pies alineados, se desvanece al subir a la cara
-    if (q.outer && q.outer.naturalWidth) {
-      const ow = q.outer.naturalWidth, oh = q.outer.naturalHeight;
-      const odw = q.dw;
-      const odh = oh * (q.dw / ow);
-      const odx = q.dx;
-      const ody = q.dy + q.dh - odh;
-      ctx.globalAlpha = Math.max(0.12, 1 - (F.cam || 0) * 0.92);
-      ctx.drawImage(q.outer, odx, ody, odw, odh);
-      ctx.globalAlpha = 1;
-    }
-    ctx.restore();
     for (const p of particles) {
       const a = Math.max(0, Math.min(1, p.life / (p.maxLife || 0.6)));
       ctx.globalAlpha = a;
@@ -4578,7 +4567,6 @@
     }
     ctx.globalAlpha = 1;
   }
-
 
   function avgCellSkeleton(ix, iy, cellSize) {
     const c = avgCell(ix, iy, cellSize);
@@ -4597,8 +4585,8 @@
 
   async function beginL8SkeletonCrumble() {
     if (won || gameOver || outro === 'done') return;
-    if (l8Skel) return;
-    particles = [];
+    if (l8Skel && l8Skel.stage !== 'spawn') return;
+    particles = particles.slice(-40);
     bombs = [];
     playerBomb = null;
     l8Debris = [];
@@ -4614,15 +4602,19 @@
     camShake = 2;
     l8Phase = 'torso';
     l8TorsoStage = 'armor';
-    hint.classList.remove('show');
-    l8Skel = { stage: 'spawn', stageT: 0, region: 'head', dirty: true, hold: 0.7 };
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>Núcleo expuesto</strong><span>El esqueleto se desmorona…</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => hint.classList.remove('show'), 2800);
+    l8Skel = { stage: 'spawn', stageT: 0, region: 'head', dirty: true, hold: 0.85 };
     updateHud();
     try {
       await spawnL8SkeletonBricks();
-      if (l8Skel) {
-        l8Skel.stage = 'hold';
-        l8Skel.stageT = 0;
-      }
+      if (!l8Skel) return;
+      if (!bricks.length) throw new Error('skeleton 0 bricks');
+      l8Skel.stage = 'hold';
+      l8Skel.stageT = 0;
+      console.log('[l8-skel] ready', bricks.length);
     } catch (e) {
       console.warn('l8 skeleton', e);
       l8Skel = null;
@@ -4631,44 +4623,46 @@
   }
 
   async function spawnL8SkeletonBricks() {
-    await loadMechSrc('mech-level8-queen-skeleton.png', 1800);
-    if (!imgW || !imgH) throw new Error('no skeleton imgData');
+    // Prefer already-decoded image if present
+    if (l8QueenSkeletonImg && l8QueenSkeletonImg.naturalWidth) {
+      // force loadMechSrc path for imgData
+    }
+    await loadMechSrc('mech-level8-queen-skeleton.png', 1600);
+    if (!imgW || !imgH || !imgData) throw new Error('no skeleton imgData');
 
-    // Encuadre a pantalla (fondo negro), pies abajo
-    const pad = 8;
     const availH = H * 0.92;
     const availW = W * 0.92;
     const fit = Math.min(availW / imgW, availH / imgH);
     const dw = imgW * fit;
     const dh = imgH * fit;
     originX = (W - dw) / 2;
-    originY = H * 0.04 + Math.max(0, (availH - dh) * 0.15);
+    originY = H * 0.03 + Math.max(0, (availH - dh) * 0.12);
     fitScale = fit;
     structureDX = 0;
     structureDY = 0;
 
     const SKEL_MIN = 7000;
-    const SKEL_CAP = 7800;
+    const SKEL_CAP = 7600;
     let localCell = 2;
     let bestN = 0;
     for (let c = 3; c >= 1; c--) {
       const ccols = Math.ceil(imgW / c);
       const crows = Math.ceil(imgH / c);
       let n = 0;
-      for (let iy = 0; iy < crows; iy++) {
+      outer: for (let iy = 0; iy < crows; iy++) {
         for (let ix = 0; ix < ccols; ix++) {
           if (avgCellSkeleton(ix, iy, c)) {
             n++;
-            if (n >= SKEL_CAP) break;
+            if (n >= SKEL_CAP) break outer;
           }
         }
-        if (n >= SKEL_CAP) break;
       }
       localCell = c;
       bestN = n;
       if (n >= SKEL_MIN) break;
     }
     console.log('[l8-skel] cell', localCell, 'est', bestN);
+    if (bestN < 500) throw new Error('too few skeleton pixels: ' + bestN);
 
     const localCols = Math.ceil(imgW / localCell);
     const localRows = Math.ceil(imgH / localCell);
@@ -4686,7 +4680,7 @@
     bricks = [];
     minIy = localRows;
     maxIy = 0;
-    groundY = Math.min(H - 6, originY + dh + 4);
+    groundY = Math.min(H - 4, originY + dh + 8);
 
     for (let iy = 0; iy < rows; iy++) {
       for (let ix = 0; ix < cols; ix++) {
@@ -4713,8 +4707,8 @@
         bricks.push(br);
       }
     }
-    // Merge ligero → tamaños distintos sin bajar a cientos
-    mergeIrregularBricks(0.14);
+    // Merge MUY ligero para variar tamaños (0.08 ≈ no “censura”)
+    if (bricks.length > 800) mergeIrregularBricks(0.08);
     for (const br of bricks) {
       if (!br.alive) continue;
       const cy = (br.baseY + br.h * 0.5 - originY) / Math.max(1e-6, imgH * fitScale);
@@ -4741,23 +4735,10 @@
     structures = [S];
     refreshTotalStructureCount();
     applyStructure(structures[0]);
+    groundY = S.l8PlayGroundY;
     console.log('[l8-skel] bricks', bricks.length);
     updateHud();
     return S;
-  }
-
-  function rebuildSkelLayer() {
-    if (!brickLayer) return;
-    try {
-      const lctx = brickLayer.getContext('2d');
-      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      lctx.clearRect(0, 0, W, H);
-      for (const br of bricks) {
-        if (!br.alive || br.falling || br.settled) continue;
-        lctx.fillStyle = br.color;
-        lctx.fillRect(br.baseX - 0.3, br.baseY - 0.3, br.w + 0.6, br.h + 0.6);
-      }
-    } catch (_) {}
   }
 
   function releaseSkelRegion(region, budget) {
@@ -4848,6 +4829,14 @@
   function drawL8SkeletonScene() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
+    // Mientras spawnea: mostrar sprite esqueleto para que no quede negro vacío
+    if (l8Skel && l8Skel.stage === 'spawn' && l8QueenSkeletonImg && l8QueenSkeletonImg.naturalWidth) {
+      const img = l8QueenSkeletonImg;
+      const fit = Math.min((W * 0.92) / img.naturalWidth, (H * 0.92) / img.naturalHeight);
+      const dw = img.naturalWidth * fit;
+      const dh = img.naturalHeight * fit;
+      ctx.drawImage(img, (W - dw) / 2, H * 0.04, dw, dh);
+    }
     // Ladrillos fijos
     if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
     // Cayendo
