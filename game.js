@@ -24,7 +24,16 @@
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
-  function levelBallSpeedMult() { return level().ballSpeed || 1; }
+  function levelBallSpeedMult() {
+    let m = level().ballSpeed || 1;
+    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'armor') m *= 1.02;
+    return m;
+  }
+  function levelPaddleScale() {
+    let s = level().paddleScale || 1;
+    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'armor') s *= 0.98;
+    return s;
+  }
   // ?level=2 para probar nivel 2 directo
   // ?level=8&phase=head — saltar a fase de cabeza (sin manos)
   // ?level=8&phase=torso — saltar a fase de torso (sin manos/cabeza)
@@ -767,7 +776,7 @@
 
     let detached = 0;
     // Cara L8: no animar miles de caídas (congela al pasar a torso) — se esfuman
-    const l8HeadPop = level().queenBoss && l8Phase === 'head';
+    const l8HeadPop = level().queenBoss && (l8Phase === 'head' || (l8Phase === 'torso' && l8TorsoStage === 'armor'));
     for (let i = 0; i < n; i++) {
       const br = bricks[i];
       if (!br.alive || br.falling || br.settled) continue;
@@ -811,7 +820,7 @@
         if (br.alive && !br.falling && !br.settled) live++;
       }
       if (live <= 0 || live > startCount * 0.50) return;
-      const l8HeadPopC = level().queenBoss && l8Phase === 'head';
+      const l8HeadPopC = level().queenBoss && (l8Phase === 'head' || (l8Phase === 'torso' && l8TorsoStage === 'armor'));
       for (let i = 0; i < n; i++) {
         const br = bricks[i];
         if (layerName && br.layer !== layerName) continue;
@@ -2959,6 +2968,31 @@
     return c;
   }
 
+  function applyL8ArmorFeel() {
+    // Paddle -2%, bola +2% solo en resto de armadura
+    if (!paddle) return;
+    const cx = paddle.x + paddle.w * 0.5;
+    basePaddleW = Math.min(168, W * 0.42) * levelPaddleScale();
+    paddle.w = (bigPaddleUntil && performance.now() < bigPaddleUntil) ? basePaddleW * 1.35 : basePaddleW;
+    paddle.h = paddleHeightForWidth(paddle.w);
+    paddle.y = H - 28 - paddle.h;
+    paddle.x = Math.max(6, Math.min(W - paddle.w - 6, cx - paddle.w / 2));
+    if (ball) {
+      const want = Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult();
+      const sp = Math.hypot(ball.vx, ball.vy);
+      ball.speed = Math.max(ball.speed || 0, want);
+      // Si ya va en juego, subir ~2% desde velocidad actual de nivel
+      if (sp > 0.4) {
+        const ns = sp * 1.02;
+        ball.vx = (ball.vx / sp) * ns;
+        ball.vy = (ball.vy / sp) * ns;
+        ball.speed = Math.max(ball.speed, ns);
+      } else {
+        ball.speed = want;
+      }
+    }
+  }
+
   function beginL8ArmorRestPhase() {
     if (!level().queenBoss || won || gameOver) return;
     if (l8Phase !== 'torso' || l8TorsoStage !== 'chest') return;
@@ -2978,14 +3012,18 @@
     structureStartCount = 0;
     grid = null;
     brickLayer = null;
+    applyL8ArmorFeel();
     hint.classList.add('show');
     hint.innerHTML = '<strong>¡El resto!</strong><span>Rompe toda la armadura blanca</span>';
     clearTimeout(window.__hintHide);
     window.__hintHide = setTimeout(() => {
       if (launched && !gameOver && !paused) hint.classList.remove('show');
     }, 2800);
-    bumpCam(2.2);
-    Promise.resolve(spawnL8RestArmor()).catch((e) => console.warn('l8 armor rest', e));
+    bumpCam(1.4);
+    // Diferir spawn un frame para que el mensaje pinte y no congele el hilo
+    setTimeout(() => {
+      Promise.resolve(spawnL8RestArmor()).catch((e) => console.warn('l8 armor rest', e));
+    }, 40);
   }
 
   /** Irregular bricks: collar, faldas, restos blancos fuera del pecho. */
@@ -3005,11 +3043,12 @@
       originY = oy;
       fitScale = fit;
 
-      const ARMOR_MIN = 2200;
-      const ARMOR_CAP = 7200;
-      let localCell = 2;
+      // Menos ladrillos / celdas más grandes → no congelar al entrar
+      const ARMOR_MIN = 900;
+      const ARMOR_CAP = 2800;
+      let localCell = 4;
       let bestN = 0;
-      for (let c = 4; c >= 1; c--) {
+      for (let c = 6; c >= 3; c--) {
         const ccols = Math.ceil(imgW / c);
         const crows = Math.ceil(imgH / c);
         let n = 0;
@@ -3083,7 +3122,8 @@
         }
       }
       groundY += 0.5;
-      mergeIrregularBricks(0.22);
+      // Merge ligero (evita trabarse con miles de celdas)
+      if (bricks.length < 2200) mergeIrregularBricks(0.12);
       for (const br of bricks) {
         br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
         br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
@@ -3877,7 +3917,7 @@
       l8DebrisTimer = 0.8 + Math.random() * 0.7;
       launched = false;
       clearLaserCannons();
-      basePaddleW = Math.min(168, W * 0.42) * (level().paddleScale || 1);
+      basePaddleW = Math.min(168, W * 0.42) * levelPaddleScale();
       const pw = basePaddleW;
       const ph = paddleHeightForWidth(pw);
       paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
@@ -4062,7 +4102,7 @@
     updateHud();
 
     clearLaserCannons();
-    basePaddleW = Math.min(168, W * 0.42) * (level().paddleScale || 1);
+    basePaddleW = Math.min(168, W * 0.42) * levelPaddleScale();
     const pw = basePaddleW;
     const ph = paddleHeightForWidth(pw);
     paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
@@ -4556,7 +4596,7 @@
     spawnDust(hx, hy, br.color, br.hp <= 1 ? 14 : 8);
     spawnMetalSparks(hx, hy); // chispas metal-metal
     // Fase pecho: explosiones al azar al golpear armadura
-    if (level().queenBoss && l8Phase === 'torso' && Math.random() < 0.38) {
+    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'chest' && Math.random() < 0.38) {
       bumpCam(2.8 + Math.random() * 3.2);
       if (typeof spawnShopBombBlast === 'function') {
         spawnShopBombBlast(hx, hy);
@@ -4906,8 +4946,8 @@
     const flying = !!(level().fly);
     // Todos los niveles: caen y desaparecen al suelo (sin amontonar) para aliviar carga
     const despawnAtGround = true;
-    // Cabeza reina: escombros en caída se borran al instante (no simular miles)
-    if (level().queenBoss && l8Phase === 'head') {
+    // Cabeza / resto armadura L8: escombros se borran al instante (evita freeze)
+    if (level().queenBoss && (l8Phase === 'head' || (l8Phase === 'torso' && l8TorsoStage === 'armor'))) {
       let any = false;
       for (const br of bricks) {
         if (!br.alive || !br.falling) continue;
