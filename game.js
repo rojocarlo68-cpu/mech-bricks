@@ -2200,23 +2200,19 @@
       : (groundY > 0 ? groundY : H * (level().groundFrac != null ? level().groundFrac : 0.82));
     let scale, dw, dh, dx, dy;
     if (torsoMode) {
-      // Cuerpo completo visible (incluida la cabeza): pies cerca del suelo, margen arriba
-      const topPad = H * 0.04;
+      // Outer = armadura sin cabeza (más baja). Under = mismo robot + cabeza (más alta).
+      // Misma escala por ancho; encuadre usa la altura del under para que quepa la cabeza.
+      const uImg = l8QueenTorsoUnderImg;
+      const uiw = (uImg && uImg.naturalWidth) ? uImg.naturalWidth : iw;
+      const uih = (uImg && uImg.naturalHeight) ? uImg.naturalHeight : ih;
+      const topPad = H * 0.03;
       const availH = Math.max(80, gy - topPad);
-      scale = (availH / (ih * footFrac)) * 0.98;
-      if (iw * scale > W * 1.2) scale = (W * 1.2) / iw;
+      scale = (availH / (uih * footFrac)) * 0.98;
+      if (uiw * scale > W * 1.15) scale = (W * 1.15) / uiw;
       dw = iw * scale;
       dh = ih * scale;
       dx = (W - dw) / 2;
-      dy = gy - footFrac * dh;
-      // Si la cabeza se sale, reducir un poco más
-      if (dy < topPad * 0.5) {
-        scale *= 0.92;
-        dw = iw * scale;
-        dh = ih * scale;
-        dx = (W - dw) / 2;
-        dy = gy - footFrac * dh;
-      }
+      dy = gy - footFrac * dh; // pies de la armadura en el suelo
     } else {
       // Top ~38% of body ≈ face + chest; scale that band to viewport height
       const faceFrac = 0.38;
@@ -2240,7 +2236,20 @@
       px = l8TorsoDriftX;
       py = Math.cos(bgT * 0.15) * 2.2;
     }
-    return { dx: dx + px, dy: dy + py, dw, dh, torso: torsoMode };
+    const out = { dx: dx + px, dy: dy + py, dw, dh, torso: torsoMode };
+    if (torsoMode) {
+      // Capa de abajo: mismo ancho/escala, más alta; pies alineados → cabeza sobresale
+      const uImg = l8QueenTorsoUnderImg;
+      if (uImg && uImg.naturalWidth) {
+        const udw = dw;
+        const udh = uImg.naturalHeight * (dw / uImg.naturalWidth);
+        out.udx = out.dx;
+        out.udy = out.dy + dh - udh;
+        out.udw = udw;
+        out.udh = udh;
+      }
+    }
+    return out;
   }
 
   function drawL8Queen() {
@@ -2252,6 +2261,10 @@
     if (!outer) return;
     ctx.save();
     ctx.globalAlpha = 1;
+    // Torso: under primero (cables+cabeza, pies alineados) → outer encima (armadura sin cabeza)
+    if (torsoMode && under && under.naturalWidth && q.udw) {
+      ctx.drawImage(under, q.udx, q.udy, q.udw, q.udh);
+    }
     ctx.drawImage(outer, q.dx, q.dy, q.dw, q.dh);
     // Head phase: underlayer skull clipped to head AABB
     if (!torsoMode && (l8Phase === 'head' || l8EyeFlashT > 0) && under && under.naturalWidth) {
@@ -2262,21 +2275,13 @@
       ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
       ctx.restore();
     }
-    // Torso: capa de abajo — cabeza siempre visible + pecho (donde se rompen ladrillos)
-    if (torsoMode && under && under.naturalWidth) {
-      // Cabeza (capa inferior)
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(q.dx, q.dy, q.dw, q.dh * l8TorsoHeadFrac);
-      ctx.clip();
-      ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
-      ctx.restore();
-      // Pecho/torso band (revela al romper armadura)
+    // Torso: pecho — under encima de la armadura para que se vea al romper ladrillos
+    if (torsoMode && under && under.naturalWidth && q.udw) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(q.dx, q.dy + q.dh * l8ChestV0, q.dw, q.dh * (l8ChestV1 - l8ChestV0));
       ctx.clip();
-      ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
+      ctx.drawImage(under, q.udx, q.udy, q.udw, q.udh);
       ctx.restore();
     }
     // Soft darkness so hands/paddle read on top
