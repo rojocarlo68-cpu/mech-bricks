@@ -281,6 +281,8 @@
   let l8TorsoStartCount = 0;
   let l8TorsoStage = 'chest'; // chest | armor (resto de armadura blanca)
   let l8Finale = null; // { t, stage, zoom, cam, shake, boomCd, booms } cinemática final
+  let l8QueenSkeletonImg = null;
+  let l8Skel = null; // { stage, stageT, region, dirty } desmorone automático esqueleto
   let l8HeadFrac = 0.132; // solo corona+cara (antes de hombros/pecho) // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
   let l8TorsoHeadFrac = 0.13; // cabeza visible (capa de abajo)
   let l8ChestV0 = 0.13; // bajo la cabeza
@@ -434,11 +436,13 @@
         loadImg(level().queenUnder || 'mech-level8-queen-under.png').catch(() => null),
         loadImg('mech-level8-queen-torso.png').catch(() => null),
         loadImg('mech-level8-queen-torso-under.png').catch(() => null),
-      ]).then(([img, under, torso, torsoUnder]) => {
+        loadImg('mech-level8-queen-skeleton.png').catch(() => null),
+      ]).then(([img, under, torso, torsoUnder, skel]) => {
         l8QueenImg = img;
         l8QueenUnderImg = under;
         l8QueenTorsoImg = torso;
         l8QueenTorsoUnderImg = torsoUnder;
+        l8QueenSkeletonImg = skel;
       });
     }
     if (level().dualLayer && level().mechLower) {
@@ -719,6 +723,7 @@
   /** Soporte realista: toda la zona de pies es cimiento hasta que casi se destruye.
    *  Con fly:true, el núcleo flotante = componente conexa más grande (sin exigir piso). */
   function recomputeSupport() {
+    if (l8Skel) return;
     const n = bricks.length;
     const supported = new Uint8Array(n);
     const q = [];
@@ -872,7 +877,7 @@
       collapseLayer('lower', ds.lower || 0);
       collapseLayer('upper', ds.upper || 0);
     } else if (localCount > 0 && structureStartCount > 0) {
-      const collapseAt = isL8ArmorRest() ? 0.32 : 0.50; // resto: -20%×2 dureza
+      const collapseAt = isL8ArmorRest() ? 0.256 : 0.50; // resto: -20%×3 dureza
       if (localCount <= structureStartCount * collapseAt) collapseLayer(null, structureStartCount);
     }
     localCount = 0;
@@ -1190,7 +1195,7 @@
 
   function maybeWin() {
     if (won || gameOver || outro === 'done' || l6Transit) return;
-    if (l8Finale) return;
+    if (l8Finale || l8Skel) return;
     // L8: no win during intro / before both hands / during head spawn
     if (level().queenBoss) {
       if (l8Intro || l8Phase === 'intro' || l8Phase === 'idle') return;
@@ -2235,6 +2240,7 @@
     l8TorsoStartCount = 0;
     l8TorsoStage = 'chest';
     l8Finale = null;
+    l8Skel = null;
     l8Lasers = [];
     l8LaserCd = 0;
     l8LasersDone = false;
@@ -4506,7 +4512,7 @@
         F.stage = 'done';
         F.stageT = 0;
         l8Finale = null;
-        finishOutro();
+        beginL8SkeletonCrumble();
       }
     }
   }
@@ -4562,6 +4568,294 @@
       ctx.globalAlpha = 1;
     }
     ctx.restore();
+    for (const p of particles) {
+      const a = Math.max(0, Math.min(1, p.life / (p.maxLife || 0.6)));
+      ctx.globalAlpha = a;
+      ctx.fillStyle = `rgb(${(p.r)|0},${(p.g)|0},${(p.b)|0})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size || 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+
+  function avgCellSkeleton(ix, iy, cellSize) {
+    const c = avgCell(ix, iy, cellSize);
+    if (!c) return null;
+    // Cualquier metal/cable opaco (no solo blanco)
+    const luma = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+    if (luma < 28) return null;
+    return c;
+  }
+
+  function skelRegionForV(v) {
+    if (v < 0.22) return 'head';
+    if (v < 0.55) return 'thorax';
+    return 'legs';
+  }
+
+  async function beginL8SkeletonCrumble() {
+    if (won || gameOver || outro === 'done') return;
+    if (l8Skel) return;
+    particles = [];
+    bombs = [];
+    playerBomb = null;
+    l8Debris = [];
+    l8ExtraDust = [];
+    l8Lasers = [];
+    bricks = [];
+    structures = [];
+    structureCount = 0;
+    grid = null;
+    brickLayer = null;
+    launched = false;
+    if (ball) { ball.vx = 0; ball.vy = 0; }
+    camShake = 2;
+    l8Phase = 'torso';
+    l8TorsoStage = 'armor';
+    hint.classList.remove('show');
+    l8Skel = { stage: 'spawn', stageT: 0, region: 'head', dirty: true, hold: 0.7 };
+    updateHud();
+    try {
+      await spawnL8SkeletonBricks();
+      if (l8Skel) {
+        l8Skel.stage = 'hold';
+        l8Skel.stageT = 0;
+      }
+    } catch (e) {
+      console.warn('l8 skeleton', e);
+      l8Skel = null;
+      finishOutro();
+    }
+  }
+
+  async function spawnL8SkeletonBricks() {
+    await loadMechSrc('mech-level8-queen-skeleton.png', 1800);
+    if (!imgW || !imgH) throw new Error('no skeleton imgData');
+
+    // Encuadre a pantalla (fondo negro), pies abajo
+    const pad = 8;
+    const availH = H * 0.92;
+    const availW = W * 0.92;
+    const fit = Math.min(availW / imgW, availH / imgH);
+    const dw = imgW * fit;
+    const dh = imgH * fit;
+    originX = (W - dw) / 2;
+    originY = H * 0.04 + Math.max(0, (availH - dh) * 0.15);
+    fitScale = fit;
+    structureDX = 0;
+    structureDY = 0;
+
+    const SKEL_MIN = 7000;
+    const SKEL_CAP = 7800;
+    let localCell = 2;
+    let bestN = 0;
+    for (let c = 3; c >= 1; c--) {
+      const ccols = Math.ceil(imgW / c);
+      const crows = Math.ceil(imgH / c);
+      let n = 0;
+      for (let iy = 0; iy < crows; iy++) {
+        for (let ix = 0; ix < ccols; ix++) {
+          if (avgCellSkeleton(ix, iy, c)) {
+            n++;
+            if (n >= SKEL_CAP) break;
+          }
+        }
+        if (n >= SKEL_CAP) break;
+      }
+      localCell = c;
+      bestN = n;
+      if (n >= SKEL_MIN) break;
+    }
+    console.log('[l8-skel] cell', localCell, 'est', bestN);
+
+    const localCols = Math.ceil(imgW / localCell);
+    const localRows = Math.ceil(imgH / localCell);
+    const localCellScreen = localCell * fit;
+    const localBrickPx = Math.max(2.0, localCellScreen + 0.45);
+    const localGrid = new Int32Array(localCols * localRows);
+    localGrid.fill(-1);
+
+    cell = localCell;
+    cols = localCols;
+    rows = localRows;
+    cellScreen = localCellScreen;
+    brickPx = localBrickPx;
+    grid = localGrid;
+    bricks = [];
+    minIy = localRows;
+    maxIy = 0;
+    groundY = Math.min(H - 6, originY + dh + 4);
+
+    for (let iy = 0; iy < rows; iy++) {
+      for (let ix = 0; ix < cols; ix++) {
+        if (bricks.length >= SKEL_CAP) break;
+        const c = avgCellSkeleton(ix, iy, cell);
+        if (!c) continue;
+        minIy = Math.min(minIy, iy);
+        maxIy = Math.max(maxIy, iy);
+        const bx = originX + ix * cellScreen;
+        const by = originY + iy * cellScreen;
+        const v = ((iy + 0.5) * cell) / imgH;
+        const br = {
+          ix, iy,
+          baseX: bx, baseY: by,
+          x: bx, y: by,
+          w: brickPx, h: brickPx,
+          color: `rgb(${c.r},${c.g},${c.b})`,
+          hp: 1, maxHp: 1,
+          alive: true, falling: false, settled: false,
+          vx: 0, vy: 0,
+          skelRegion: skelRegionForV(v),
+        };
+        grid[iy * cols + ix] = bricks.length;
+        bricks.push(br);
+      }
+    }
+    // Merge ligero → tamaños distintos sin bajar a cientos
+    mergeIrregularBricks(0.14);
+    for (const br of bricks) {
+      if (!br.alive) continue;
+      const cy = (br.baseY + br.h * 0.5 - originY) / Math.max(1e-6, imgH * fitScale);
+      br.skelRegion = skelRegionForV(cy);
+    }
+
+    brickLayer = document.createElement('canvas');
+    brickLayer.width = Math.floor(W * dpr);
+    brickLayer.height = Math.floor(H * dpr);
+    const lctx = brickLayer.getContext('2d');
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lctx.clearRect(0, 0, W, H);
+    for (const br of bricks) {
+      if (!br.alive) continue;
+      lctx.fillStyle = br.color;
+      lctx.fillRect(br.baseX - 0.3, br.baseY - 0.3, br.w + 0.6, br.h + 0.6);
+    }
+
+    structureCount = bricks.length;
+    structureStartCount = structureCount;
+    const S = captureStructure();
+    S.l8Skeleton = true;
+    S.l8PlayGroundY = groundY;
+    structures = [S];
+    refreshTotalStructureCount();
+    applyStructure(structures[0]);
+    console.log('[l8-skel] bricks', bricks.length);
+    updateHud();
+    return S;
+  }
+
+  function rebuildSkelLayer() {
+    if (!brickLayer) return;
+    try {
+      const lctx = brickLayer.getContext('2d');
+      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lctx.clearRect(0, 0, W, H);
+      for (const br of bricks) {
+        if (!br.alive || br.falling || br.settled) continue;
+        lctx.fillStyle = br.color;
+        lctx.fillRect(br.baseX - 0.3, br.baseY - 0.3, br.w + 0.6, br.h + 0.6);
+      }
+    } catch (_) {}
+  }
+
+  function releaseSkelRegion(region, budget) {
+    let n = 0;
+    for (let i = 0; i < bricks.length && n < budget; i++) {
+      const br = bricks[i];
+      if (!br.alive || br.falling || br.settled) continue;
+      if (br.skelRegion !== region) continue;
+      clearBrickGrid(br, i);
+      br.falling = true;
+      br.vx = (Math.random() - 0.5) * 1.6;
+      br.vy = 0.25 + Math.random() * 1.1;
+      n++;
+    }
+    return n;
+  }
+
+  function countSkelRegion(region) {
+    let n = 0;
+    for (const br of bricks) {
+      if (br.alive && !br.falling && !br.settled && br.skelRegion === region) n++;
+    }
+    return n;
+  }
+
+  function updateL8Skeleton(dt) {
+    const S = l8Skel;
+    if (!S) return;
+    S.stageT += dt;
+    if (ball && paddle) stickBallToPaddle();
+
+    if (S.stage === 'spawn') return;
+
+    if (S.stage === 'hold') {
+      if (S.stageT >= (S.hold || 0.7)) {
+        S.stage = 'crumble';
+        S.region = 'head';
+        S.stageT = 0;
+        bumpCam(2);
+      }
+      return;
+    }
+
+    if (S.stage === 'crumble') {
+      const order = ['head', 'thorax', 'legs'];
+      const idx = order.indexOf(S.region);
+      // Liberar por oleadas (evita freeze)
+      const budget = S.region === 'head' ? 90 : (S.region === 'thorax' ? 110 : 120);
+      const released = releaseSkelRegion(S.region, Math.max(40, (budget * dt * 60) | 0));
+      if (released > 0) S.dirty = true;
+      // Rebuild capa de pie de vez en cuando
+      if (S.dirty && (S.stageT * 10 | 0) !== ((S.stageT - dt) * 10 | 0)) {
+        rebuildSkelLayer();
+        S.dirty = false;
+      }
+      camShake = Math.min(10, camShake + 0.08);
+      const left = countSkelRegion(S.region);
+      if (left <= 0 || S.stageT > 4.5) {
+        if (idx < order.length - 1) {
+          S.region = order[idx + 1];
+          S.stageT = 0;
+          bumpCam(3);
+          spawnDust(W * 0.5, H * (0.2 + idx * 0.25), 'rgb(180,180,190)', 16, { spread: 2, up: 2, jitter: 14 });
+        } else {
+          S.stage = 'ending';
+          S.stageT = 0;
+          rebuildSkelLayer();
+        }
+      }
+      return;
+    }
+
+    if (S.stage === 'ending') {
+      // Esperar que terminen de caer / despawn
+      let falling = 0;
+      for (const br of bricks) if (br.alive && br.falling) falling++;
+      if (falling === 0 || S.stageT > 3.5) {
+        l8Skel = null;
+        bricks = [];
+        structures = [];
+        brickLayer = null;
+        particles = [];
+        finishOutro();
+      }
+    }
+  }
+
+  function drawL8SkeletonScene() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    // Ladrillos fijos
+    if (brickLayer) ctx.drawImage(brickLayer, 0, 0, W, H);
+    // Cayendo
+    for (const br of bricks) {
+      if (!br.alive || !br.falling) continue;
+      ctx.fillStyle = br.color;
+      ctx.fillRect(br.x - 0.3, br.y - 0.3, br.w + 0.6, br.h + 0.6);
+    }
     for (const p of particles) {
       const a = Math.max(0, Math.min(1, p.life / (p.maxLife || 0.6)));
       ctx.globalAlpha = a;
@@ -4899,7 +5193,7 @@
     }
     {
       let dmg = ballDamage() * (level().brickDamageMult || 1);
-      if (isL8ArmorRest()) dmg *= 1.5625; // -20% y otro -20% dureza (0.8^2)
+      if (isL8ArmorRest()) dmg *= 1.953125; // -20%×3 dureza acumulada
       br.hp -= dmg;
     }
     score += 1; // $1 por golpe
@@ -5902,6 +6196,22 @@
       updateHud();
       return;
     }
+    if (l8Skel) {
+      updateL8Skeleton(dt);
+      updateFalling(dt);
+      // partículas suaves
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= dt;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        p.x += (p.vx || 0) * dt * 60;
+        p.y += (p.vy || 0) * dt * 60;
+        p.vy = (p.vy || 0) + 0.1 * dt * 60;
+      }
+      if (particles.length > 160) particles.splice(0, particles.length - 160);
+      updateHud();
+      return;
+    }
     if (level().queenBoss && l8Fade) {
       updateL8Fade(dt);
       // paddle track during fade
@@ -6815,6 +7125,7 @@
       }
     }
     if (l8Finale) { drawL8Finale(); return; }
+    if (l8Skel) { drawL8SkeletonScene(); return; }
     if (level().queenBoss) drawL8Queen();
     if (!level().queenBoss) drawGround();
     if (!level().fly) {
