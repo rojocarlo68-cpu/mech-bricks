@@ -937,6 +937,11 @@
       beginL8ArmorRestPhase();
       return;
     }
+    // Torso final (armor): nunca slow-mo pesado
+    if (level().queenBoss && l8Phase === 'torso') {
+      finishL8TorsoWinLight();
+      return;
+    }
     outro = 'slowmo';
     outroT = 0;
     bombs = [];
@@ -1221,6 +1226,11 @@
       } else {
         return;
       }
+    }
+    // L8 resto-armadura / torso final: sin slow-mo (congela con miles de FX)
+    if (level().queenBoss && l8Phase === 'torso') {
+      finishL8TorsoWinLight();
+      return;
     }
     // Ya no hay estructura: si aún caen ladrillos → slow-mo; si no → victoria / L6 transit
     if (countFalling() > 0) startSlowMoOutro();
@@ -3059,11 +3069,11 @@
       fitScale = fit;
 
       // Menos ladrillos / celdas más grandes → no congelar al entrar
-      const ARMOR_MIN = 700;
-      const ARMOR_CAP = 1800;
+      const ARMOR_MIN = 500;
+      const ARMOR_CAP = 1200;
       let localCell = 4;
       let bestN = 0;
-      for (let c = 6; c >= 3; c--) {
+      for (let c = 8; c >= 4; c--) {
         const ccols = Math.ceil(imgW / c);
         const crows = Math.ceil(imgH / c);
         let n = 0;
@@ -4331,9 +4341,9 @@
 
   /** Bomba en resto-armadura: mata en radio, un solo redibujo, sin FX pesados. */
   function detonateArmorBombFast(x, y, R) {
-    bumpCam(2.8);
-    spawnDust(x, y, 'rgb(255,150,50)', 16, { spread: 1.5, up: 2.0, jitter: 10 });
-    spawnDust(x, y, 'rgb(70,65,60)', 12, { spread: 1.3, up: 1.5, jitter: 12 });
+    bumpCam(2.2);
+    spawnDust(x, y, 'rgb(255,150,50)', 12, { spread: 1.4, up: 1.8, jitter: 8 });
+    spawnDust(x, y, 'rgb(70,65,60)', 8, { spread: 1.2, up: 1.4, jitter: 10 });
     const r2 = R * R;
     let hit = 0;
     const run = () => {
@@ -4344,26 +4354,79 @@
         const cy = br.y + br.h * 0.5;
         const dx = cx - x, dy = cy - y;
         if (dx * dx + dy * dy > r2) continue;
-        const wasStructure = !br.falling;
         br.alive = false;
         br.falling = false;
         br.settled = false;
-        if (wasStructure && !br.panel) clearBrickGrid(br, i);
+        // No clearBrickGrid por ladrillo (caro); grid se ignora tras wipe/rebuild
         score += 1;
         hit++;
       }
     };
     if (structures.length) eachStructure(run);
     else run();
+
+    // Si queda ≤55%, tumbar el resto YA (sin grafo de soporte)
+    let live = 0;
+    for (const br of bricks) {
+      if (br.alive && !br.falling && !br.settled) live++;
+    }
+    const start = structureStartCount || l8TorsoStartCount || 1;
+    if (live > 0 && live <= start * 0.55) {
+      for (let i = 0; i < bricks.length; i++) {
+        const br = bricks[i];
+        if (!br.alive) continue;
+        br.alive = false;
+        br.falling = false;
+        br.settled = false;
+        score += 1;
+      }
+      live = 0;
+      // Poquito polvo visible de “desmorone” (no por cada ladrillo)
+      for (let k = 0; k < 6; k++) {
+        spawnDust(
+          x + (Math.random() - 0.5) * 80,
+          y + (Math.random() - 0.5) * 100,
+          'rgb(200,200,210)',
+          8,
+          { spread: 1.6, up: 1.8, jitter: 14 }
+        );
+      }
+      bumpCam(3.2);
+    }
+
     rebuildBrickLayerAlive();
-    // Colapso en lote (sin marcar falling)
-    recomputeSupport();
-    rebuildBrickLayerAlive();
-    if (particles.length > 280) particles.splice(0, particles.length - 280);
+    if (particles.length > 180) particles.splice(0, particles.length - 180);
     refreshTotalStructureCount();
     updateHud();
-    maybeWin();
+    if (live <= 0) {
+      // Diferir victoria un frame: deja pintar el polvo y evita el hitch del mensaje
+      setTimeout(() => finishL8TorsoWinLight(), 50);
+    }
     return hit;
+  }
+
+  /** Victoria L8 torso sin slow-mo ni simulación de escombros. */
+  function finishL8TorsoWinLight() {
+    if (won || gameOver || outro === 'done') return;
+    // Limpiar carga pesada YA
+    particles = [];
+    bombs = [];
+    playerBomb = null;
+    l8Debris = [];
+    l8ExtraDust = [];
+    l8Lasers = [];
+    bricks = [];
+    structures = [];
+    structureCount = 0;
+    grid = null;
+    brickLayer = null;
+    brickLayerLower = null;
+    brickLayerUpper = null;
+    outro = null;
+    outroT = 0;
+    window.__outroDust = false;
+    camShake = Math.min(camShake, 2);
+    finishOutro();
   }
 
   function launch() {
@@ -4640,9 +4703,30 @@
       }
     }
     score += pts;
-    drawBrickToLayer(br);
-    if (wasStructure) recomputeSupport();
-    else updateHud();
+    if (isL8ArmorRest()) {
+      // Sin recomputeSupport (congela); tumbar si queda poco
+      let live = 0;
+      for (const b of bricks) if (b.alive && !b.falling && !b.settled) live++;
+      const start = structureStartCount || l8TorsoStartCount || 1;
+      if (live > 0 && live <= start * 0.55) {
+        for (const b of bricks) {
+          if (!b.alive) continue;
+          b.alive = false;
+          b.falling = false;
+          b.settled = false;
+        }
+        live = 0;
+      }
+      rebuildBrickLayerAlive();
+      refreshTotalStructureCount();
+      updateHud();
+      if (live <= 0) setTimeout(() => finishL8TorsoWinLight(), 40);
+      else maybeWin();
+    } else {
+      drawBrickToLayer(br);
+      if (wasStructure) recomputeSupport();
+      else updateHud();
+    }
   }
 
   function ballDamage() {
@@ -4689,7 +4773,7 @@
   }
 
   function explodeAtOnCurrent(x, y, R, pts, r2) {
-    // Armor rest: sin polvo por ladrillo ni draw N veces
+    // Armor rest: sin polvo por ladrillo ni grafo de soporte
     if (isL8ArmorRest()) {
       let hit = 0;
       for (let i = 0; i < bricks.length; i++) {
@@ -4699,17 +4783,24 @@
         const cy = br.y + br.h * 0.5;
         const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
         if (d2 > r2) continue;
-        const wasStructure = !br.falling;
         br.alive = false;
         br.falling = false;
         br.settled = false;
-        if (wasStructure && !br.panel) clearBrickGrid(br, i);
         score += pts;
         hit++;
       }
       if (hit) {
-        rebuildBrickLayerAlive();
-        recomputeSupport();
+        let live = 0;
+        for (const br of bricks) if (br.alive && !br.falling && !br.settled) live++;
+        const start = structureStartCount || l8TorsoStartCount || 1;
+        if (live > 0 && live <= start * 0.55) {
+          for (const br of bricks) {
+            if (!br.alive) continue;
+            br.alive = false;
+            br.falling = false;
+            br.settled = false;
+          }
+        }
         rebuildBrickLayerAlive();
       }
       return hit;
