@@ -243,6 +243,7 @@
   let l8EyeFlashT = 0; // red eye flash countdown (seconds)
   let l8HeadStartCount = 0;
   let l8TorsoStartCount = 0;
+  let l8TorsoStage = 'chest'; // chest | armor (resto de armadura blanca)
   let l8HeadFrac = 0.132; // solo corona+cara (antes de hombros/pecho) // crown+face (~top 24%) // crown+face ≈ top 15.5% of queen sprite
   let l8TorsoHeadFrac = 0.13; // cabeza visible (capa de abajo)
   let l8ChestV0 = 0.13; // bajo la cabeza
@@ -907,6 +908,11 @@
       beginL8TorsoPhase();
       return;
     }
+    // Pecho limpio → resto de armadura blanca
+    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'chest') {
+      beginL8ArmorRestPhase();
+      return;
+    }
     outro = 'slowmo';
     outroT = 0;
     bombs = [];
@@ -1071,6 +1077,10 @@
       beginL8TorsoPhase();
       return;
     }
+    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'chest') {
+      beginL8ArmorRestPhase();
+      return;
+    }
     // L6 wave 1 clear → camera turn + more mechs (not next level)
     if (level().id === 6 && l6Wave === 1) {
       outro = null;
@@ -1161,6 +1171,11 @@
     // L8 head cleared → torso phase (not level win)
     if (level().queenBoss && l8Phase === 'head') {
       beginL8TorsoPhase();
+      return;
+    }
+    // L8 pecho limpio → resto de armadura blanca
+    if (level().queenBoss && l8Phase === 'torso' && l8TorsoStage === 'chest') {
+      beginL8ArmorRestPhase();
       return;
     }
     // L6: wave 1 clear → finishOutro → l6PhaseTransition (camera + waves 2–3).
@@ -2169,6 +2184,7 @@
     l8EyeFlashT = 0;
     l8HeadStartCount = 0;
     l8TorsoStartCount = 0;
+    l8TorsoStage = 'chest';
     l8Lasers = [];
     l8LaserCd = 0;
     l8LasersDone = false;
@@ -2275,11 +2291,15 @@
       ctx.drawImage(under, q.dx, q.dy, q.dw, q.dh);
       ctx.restore();
     }
-    // Torso: pecho — under encima de la armadura para que se vea al romper ladrillos
+    // Torso: under encima de armadura (pecho, o cuerpo entero en fase armor)
     if (torsoMode && under && under.naturalWidth && q.udw) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(q.dx, q.dy + q.dh * l8ChestV0, q.dw, q.dh * (l8ChestV1 - l8ChestV0));
+      if (l8TorsoStage === 'armor') {
+        ctx.rect(q.dx, q.dy, q.dw, q.dh);
+      } else {
+        ctx.rect(q.dx, q.dy + q.dh * l8ChestV0, q.dw, q.dh * (l8ChestV1 - l8ChestV0));
+      }
       ctx.clip();
       ctx.drawImage(under, q.udx, q.udy, q.udw, q.udh);
       ctx.restore();
@@ -2697,6 +2717,7 @@
     l8LaserCd = 0;
     l8LasersDone = false;
     l8TorsoStartCount = 0;
+    l8TorsoStage = 'chest';
     l8TorsoQuakeT = 0;
     l8ExtraDust = [];
     window.__l8LaserImmuneUntil = 0;
@@ -2890,7 +2911,7 @@
       l8Lasers = [];
       l8LasersDone = true;
       updateHud();
-      bumpCam(4.5);
+      bumpCam(1.8);
       console.log('[l8-torso] bricks', bricks.length);
       return S;
     } finally {
@@ -2914,6 +2935,203 @@
       applyStructureOffset();
       if (S.l8PlayGroundY) groundY = S.l8PlayGroundY;
     });
+  }
+
+  /** Resto de armadura blanca (fuera del pecho ya destruido). */
+  function avgCellRestArmor(ix, iy, cellSize) {
+    const v = ((iy + 0.5) * cellSize) / Math.max(1, imgH);
+    // Excluir franja de pecho ya limpiada
+    if (v >= l8ChestV0 && v <= l8ChestV1) return null;
+    // Evitar zona de cabeza vacía de la capa outer
+    if (v < 0.02) return null;
+    const u = ((ix + 0.5) * cellSize) / Math.max(1, imgW);
+    if (u < 0.04 || u > 0.96) return null;
+    const c = avgCell(ix, iy, cellSize);
+    if (!c) return null;
+    const luma = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+    const isGoldish = (c.r > 145 && c.g > 105 && c.b < c.r * 0.92 && (c.r + c.g) > c.b * 2.1);
+    const isLight = luma >= 118;
+    const isWhiteMetal = luma >= 145 && Math.abs(c.r - c.g) < 45 && Math.abs(c.g - c.b) < 50;
+    // Falda/forro rojizo oscuro no cuenta como armadura blanca
+    const isDarkRedLining = (c.r > 70 && c.r > c.g * 1.35 && c.r > c.b * 1.35 && luma < 110);
+    if (isDarkRedLining) return null;
+    if (!(isLight || isGoldish || isWhiteMetal)) return null;
+    return c;
+  }
+
+  function beginL8ArmorRestPhase() {
+    if (!level().queenBoss || won || gameOver) return;
+    if (l8Phase !== 'torso' || l8TorsoStage !== 'chest') return;
+    if (l8SpawnBusy) return;
+    outro = null;
+    outroT = 0;
+    window.__outroDust = false;
+    l8TorsoStage = 'armor';
+    particles = [];
+    bombs = [];
+    playerBomb = null;
+    l8Debris = [];
+    l8Lasers = [];
+    bricks = [];
+    structures = [];
+    structureCount = 0;
+    structureStartCount = 0;
+    grid = null;
+    brickLayer = null;
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡El resto!</strong><span>Rompe toda la armadura blanca</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (launched && !gameOver && !paused) hint.classList.remove('show');
+    }, 2800);
+    bumpCam(2.2);
+    Promise.resolve(spawnL8RestArmor()).catch((e) => console.warn('l8 armor rest', e));
+  }
+
+  /** Irregular bricks: collar, faldas, restos blancos fuera del pecho. */
+  async function spawnL8RestArmor() {
+    if (!level().queenBoss || won || gameOver) return null;
+    if (l8SpawnBusy) return null;
+    l8SpawnBusy = true;
+    try {
+      await loadMechSrc('mech-level8-queen-torso.png', 1800);
+      const q = l8QueenDrawParams();
+      if (!q || !imgW || !imgH) return null;
+
+      const fit = q.dw / imgW;
+      const ox = q.dx;
+      const oy = q.dy;
+      originX = ox;
+      originY = oy;
+      fitScale = fit;
+
+      const ARMOR_MIN = 2200;
+      const ARMOR_CAP = 7200;
+      let localCell = 2;
+      let bestN = 0;
+      for (let c = 4; c >= 1; c--) {
+        const ccols = Math.ceil(imgW / c);
+        const crows = Math.ceil(imgH / c);
+        let n = 0;
+        for (let iy = 0; iy < crows; iy++) {
+          for (let ix = 0; ix < ccols; ix++) {
+            if (avgCellRestArmor(ix, iy, c)) {
+              n++;
+              if (n >= ARMOR_CAP) break;
+            }
+          }
+          if (n >= ARMOR_CAP) break;
+        }
+        localCell = c;
+        bestN = n;
+        if (n >= ARMOR_MIN) break;
+      }
+      console.log('[l8-armor] cell', localCell, 'estBricks', bestN);
+
+      const localCols = Math.ceil(imgW / localCell);
+      const localRows = Math.ceil(imgH / localCell);
+      const localCellScreen = localCell * fit;
+      const localBrickPx = Math.max(2.2, localCellScreen + 0.55);
+      const localGrid = new Int32Array(localCols * localRows);
+      localGrid.fill(-1);
+
+      cell = localCell;
+      cols = localCols;
+      rows = localRows;
+      cellScreen = localCellScreen;
+      brickPx = localBrickPx;
+      grid = localGrid;
+      bricks = [];
+      minIy = localRows;
+      maxIy = 0;
+      const savedGround = l8RooftopGroundY > 0 ? l8RooftopGroundY : (H * 0.88);
+      groundY = 0;
+
+      for (let iy = 0; iy < rows; iy++) {
+        for (let ix = 0; ix < cols; ix++) {
+          if (bricks.length >= ARMOR_CAP) break;
+          const c = avgCellRestArmor(ix, iy, cell);
+          if (!c) continue;
+          minIy = Math.min(minIy, iy);
+          maxIy = Math.max(maxIy, iy);
+          const bx = originX + ix * cellScreen;
+          const by = originY + iy * cellScreen;
+          const br = {
+            ix, iy,
+            baseX: bx,
+            baseY: by,
+            x: bx,
+            y: by,
+            w: brickPx,
+            h: brickPx,
+            color: `rgb(${c.r},${c.g},${c.b})`,
+            hp: 1,
+            maxHp: 1,
+            alive: true,
+            falling: false,
+            settled: false,
+            vx: 0,
+            vy: 0,
+            l8u: (ix * cell) / imgW,
+            l8v: (iy * cell) / imgH,
+            l8uw: cell / imgW,
+            l8vh: cell / imgH,
+          };
+          groundY = Math.max(groundY, br.y + br.h);
+          grid[iy * cols + ix] = bricks.length;
+          bricks.push(br);
+        }
+      }
+      groundY += 0.5;
+      mergeIrregularBricks(0.22);
+      for (const br of bricks) {
+        br.l8u = (br.baseX - originX) / Math.max(1e-6, imgW * fitScale);
+        br.l8v = (br.baseY - originY) / Math.max(1e-6, imgH * fitScale);
+        br.l8uw = br.w / Math.max(1e-6, imgW * fitScale);
+        br.l8vh = br.h / Math.max(1e-6, imgH * fitScale);
+      }
+
+      brickLayer = document.createElement('canvas');
+      brickLayer.width = Math.floor(W * dpr);
+      brickLayer.height = Math.floor(H * dpr);
+      const lctx = brickLayer.getContext('2d');
+      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lctx.clearRect(0, 0, W, H);
+      for (const br of bricks) drawBrickToLayer(br);
+
+      structureCount = bricks.length;
+      structureStartCount = structureCount;
+      l8TorsoStartCount = structureCount;
+      structureDX = 0;
+      structureDVX = 0;
+      structureDY = 0;
+      structureDVY = 0;
+      structureAngle = 0;
+      structureAV = 0;
+      jumpPhase = 'ground';
+      jumpCooldown = 99;
+      jumpTargetDX = 0;
+      applyStructureOffset();
+
+      const S = captureStructure();
+      S.l8Torso = true;
+      S.l8ArmorRest = true;
+      S.l8PlayGroundY = savedGround;
+      S.groundY = savedGround;
+      groundY = savedGround;
+      structures = [S];
+      refreshTotalStructureCount();
+      aliveCount = bricks.length;
+      applyStructure(structures[0]);
+      groundY = savedGround;
+      syncL8TorsoToQueen();
+      updateHud();
+      bumpCam(1.6);
+      console.log('[l8-armor] bricks', bricks.length);
+      return S;
+    } finally {
+      l8SpawnBusy = false;
+    }
   }
 
   function initL8TorsoBounceLasers() {
@@ -5333,13 +5551,13 @@
       }
       l8TorsoDriftX += (l8TorsoDriftTarget - l8TorsoDriftX) * Math.min(1, dt * 0.55);
 
-      // Earthquake + MÁS polvo
+      // Temblor suave (menos sacudida)
       l8TorsoQuakeT -= dt;
       if (l8TorsoQuakeT <= 0) {
-        bumpCam(2.4 + Math.random() * 3.8);
-        l8TorsoQuakeT = 0.14 + Math.random() * 0.28;
+        bumpCam(0.55 + Math.random() * 0.85);
+        l8TorsoQuakeT = 0.45 + Math.random() * 0.7;
       }
-      const dustBurst = Math.max(2, (dt * 22) | 0);
+      const dustBurst = Math.max(1, (dt * 10) | 0);
       for (let k = 0; k < dustBurst; k++) {
         if (Math.random() > 0.65) continue;
         l8ExtraDust.push({
@@ -6084,7 +6302,7 @@
   }
 
   function bumpCam(amount) {
-    const cap = (level().queenBoss && l8Phase === 'torso') ? 28 : 18;
+    const cap = (level().queenBoss && l8Phase === 'torso') ? 10 : 18;
     camShake = Math.min(cap, camShake + amount * 1.3);
   }
 
@@ -6127,7 +6345,7 @@
     // Torso phase = earthquake (much stronger resting shake)
     const rest = paused
       ? 0.2
-      : (level().queenBoss && l8Phase === 'torso' ? 4.6 : 0.72);
+      : (level().queenBoss && l8Phase === 'torso' ? 1.15 : 0.72);
     const amp = rest + camShake;
     const t = performance.now() * 0.001;
     let ox = Math.sin(t * 17.3) * amp * 0.35 + Math.sin(t * 41.1) * amp * 0.18;
