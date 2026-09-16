@@ -463,13 +463,6 @@
       powerBarsEl.innerHTML = html;
       powerBarsEl.classList.toggle('show', !!html);
     }
-    if (recordHudEl) {
-      const rec = bestRecords[String(level().id)];
-      if (rec && rec.time != null) {
-        recordHudEl.textContent = 'Récord Nv' + level().id + ': ' + (rec.time | 0) + 's';
-        recordHudEl.classList.add('show');
-      } else recordHudEl.classList.remove('show');
-    }
     if (scoreBumpT > 0 && scoreEl) {
       scoreEl.style.transform = 'scale(1.12)';
       scoreEl.style.transition = 'transform 0.12s ease';
@@ -8243,6 +8236,12 @@
     });
   }
 
+  if (resetBtn) {
+    resetBtn.addEventListener('pointerdown', () => setResetBtn(true));
+    resetBtn.addEventListener('pointerup', () => setResetBtn(false));
+    resetBtn.addEventListener('pointerleave', () => setResetBtn(false));
+    resetBtn.addEventListener('pointercancel', () => setResetBtn(false));
+  }
   resetBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     hideSoftFail();
@@ -8258,7 +8257,7 @@
     bombs = [];
     playerBomb = null;
     try { closeAllMenus(); } catch (_) {}
-    try { setPauseBtn(false); setShopBtn(false); setPackBtn(false); } catch (_) {}
+    try { setPauseBtn(false); setShopBtn(false); setPackBtn(false); setResetBtn(false); } catch (_) {}
 
     if (won && levelIndex >= LEVELS.length - 1) {
       levelIndex = 0;
@@ -8818,10 +8817,14 @@
   }
 
   const btnPauseImg = document.getElementById('btnPauseImg');
+  const btnResetImg = document.getElementById('btnResetImg');
   const btnShopImg = document.getElementById('btnShopImg');
   const btnPackImg = document.getElementById('btnPackImg');
   function setPauseBtn(on) {
     if (btnPauseImg) btnPauseImg.src = on ? 'btn-pause-on.png' : 'btn-pause.png';
+  }
+  function setResetBtn(on) {
+    if (btnResetImg) btnResetImg.src = on ? 'btn-reset-on.png' : 'btn-reset.png';
   }
   function setShopBtn(on) {
     if (btnShopImg) btnShopImg.src = on ? 'btn-shop-on.png' : 'btn-shop.png';
