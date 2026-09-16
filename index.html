@@ -4,8 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Mech Arkanoid</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -305,29 +303,33 @@
     }
     #comboHud {
       display: none;
-      position: absolute;
-      left: 8px;
-      bottom: 26px;
-      z-index: 6;
+      margin-left: 8px;
       pointer-events: none;
-      font-family: Bangers, Impact, Haettenschweiler, "Arial Black", sans-serif;
-      font-size: clamp(28px, 8.5vw, 44px);
-      font-style: italic;
-      font-weight: 400;
-      line-height: 0.9;
-      color: #ffe14a;
-      -webkit-text-stroke: 3px #140300;
-      paint-order: stroke fill;
-      text-shadow: 4px 4px 0 #e10600, 0 0 10px rgba(255,80,0,.55);
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-      transform: rotate(-8deg);
-      transform-origin: left bottom;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: clamp(22px, 5.5vw, 36px);
+      font-weight: 800;
+      color: #ffd24a;
+      text-shadow: 0 2px 8px rgba(0,0,0,.8);
+      letter-spacing: .04em;
+      white-space: nowrap;
     }
-    #comboHud.show { display: block; animation: comboPop 0.18s cubic-bezier(.2,1.6,.4,1); }
+    #comboHud.show { display: inline-block; animation: comboPop 0.16s ease-out; }
     @keyframes comboPop {
-      from { transform: rotate(-8deg) scale(0.55); opacity: 0; }
-      to   { transform: rotate(-8deg) scale(1); opacity: 1; }
+      from { transform: scale(0.7); opacity: 0; }
+      to   { transform: scale(1); opacity: 1; }
+    }
+    #comboShatter {
+      position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+      pointer-events: none; z-index: 40; overflow: hidden;
+    }
+    .combo-shard {
+      position: absolute;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-weight: 800;
+      color: #ffd24a;
+      text-shadow: 0 2px 8px rgba(0,0,0,.8);
+      white-space: nowrap;
+      will-change: transform, opacity;
     }
     .shop-item .icon img, .pack-item .icon img {
       width: 36px !important; height: 36px !important;
@@ -361,15 +363,10 @@
     }
     #recordHud.show { display: block; }
     #softFail {
-      display: none; position: absolute; inset: 0; z-index: 20;
-      background: rgba(0,0,0,.72); align-items: center; justify-content: center;
-      flex-direction: column; gap: 12px; padding: 24px;
+      /* usa .overlay + .panel (plantilla industrial) */
+      z-index: 22;
     }
-    #softFail.show { display: flex; }
-    #softFail h2 { font-size: 28px; font-weight: 800; color: #ff6b6b; }
-    #softFail .soft-btns { display: flex; flex-direction: column; gap: 10px; width: min(280px, 86vw); }
-    #softFail button { width: 100%; }
-    #softFail button.revivir { background: #2a9d8f; }
+    #softFail .panel { width: min(420px, 100%); }
     .shop-item.daily-deal { outline: 1px solid rgba(255,180,40,.55); background: rgba(255,140,0,.08); }
     .collection { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.12); }
     .collection h3 { font-size: 13px; margin-bottom: 6px; color: #ffc070; }
@@ -406,11 +403,14 @@
         <div class="phase-label">100% resto</div>
         <div class="phase-track"><div class="phase-fill"></div></div>
       </div>
-      <div id="softFail" aria-hidden="true">
-        <h2>Game over</h2>
-        <div class="soft-btns">
-          <button type="button" data-act="retry">Reintentar</button>
-          <button type="button" class="secondary" data-act="menu">Menú</button>
+      <div id="softFail" class="overlay" aria-hidden="true">
+        <div class="panel">
+          <h2>Game over</h2>
+          <p class="sub">El mech sigue en pie</p>
+          <div class="menu-btns">
+            <button type="button" class="nav-primary" data-act="retry">Reintentar</button>
+            <button type="button" class="nav-secondary" data-act="menu">Menú</button>
+          </div>
         </div>
       </div>
       <button type="button" class="img-btn" id="btnBomb" aria-label="Bomba" aria-hidden="true">
@@ -474,6 +474,6 @@
       </div>
     </div>
   </div>
-  <script src="game.js?v=76"></script>
+  <script src="game.js?v=77"></script>
 </body>
 </html>

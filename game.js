@@ -304,7 +304,40 @@
     const gain = Math.max(0, Math.round(base * comboMult * (dailyMutators ? dailyMutators.moneyMult : 1)));
     return gain;
   }
+  function shatterComboHud() {
+    const el = comboHudEl || document.getElementById('comboHud');
+    const layer = document.getElementById('comboShatter');
+    if (!el || !layer || !el.classList.contains('show')) return;
+    const text = (el.textContent || '').trim();
+    if (!text) return;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const size = cs.fontSize;
+    layer.innerHTML = '';
+    const letters = text.split('');
+    const unit = r.width / Math.max(1, letters.length);
+    letters.forEach((ch, i) => {
+      if (ch === ' ') return;
+      const s = document.createElement('span');
+      s.className = 'combo-shard';
+      s.textContent = ch;
+      s.style.left = (r.left + i * unit) + 'px';
+      s.style.top = r.top + 'px';
+      s.style.fontSize = size;
+      const dx = (i - letters.length / 2) * (10 + Math.random() * 18);
+      const dy = 24 + Math.random() * 70;
+      const rot = (Math.random() - 0.5) * 420;
+      s.style.transition = 'transform 0.48s cubic-bezier(.2,.7,.3,1), opacity 0.48s ease';
+      layer.appendChild(s);
+      requestAnimationFrame(() => {
+        s.style.transform = 'translate(' + dx + 'px,' + dy + 'px) rotate(' + rot + 'deg) scale(0.4)';
+        s.style.opacity = '0';
+      });
+    });
+    setTimeout(() => { layer.innerHTML = ''; }, 560);
+  }
   function resetCombo() {
+    shatterComboHud();
     comboCount = 0;
     comboMult = 1;
     comboFlashT = 0;
@@ -395,9 +428,11 @@
     ensureJuiceHud();
     if (comboHudEl) {
       if (comboCount >= 2) {
-        comboHudEl.textContent = '¡COMBO x' + comboMult + '!';
+        comboHudEl.textContent = 'COMBO x' + comboMult;
         comboHudEl.classList.add('show');
-      } else comboHudEl.classList.remove('show');
+      } else {
+        comboHudEl.classList.remove('show');
+      }
     }
     if (phaseBarEl) {
       const start = structureStartCount || 1;
@@ -5655,13 +5690,10 @@
   function updatePaddleDeathAnim(dt) {
     if (!paddleDeathAnim) return;
     paddleDeathAnim.elapsed += dt * 1000;
-    while (paddleDeathAnim.elapsed >= PADDLE_DEATH_FRAME_MS && paddleDeathAnim.frame < 7) {
+    // frames 0–7 = explosión; frame 8 = vacío (se esfuma)
+    while (paddleDeathAnim.elapsed >= PADDLE_DEATH_FRAME_MS && paddleDeathAnim.frame < 8) {
       paddleDeathAnim.elapsed -= PADDLE_DEATH_FRAME_MS;
       paddleDeathAnim.frame++;
-    }
-    // Hold last frame; do not clear — soft-fail overlay stays; restart clears via reset
-    if (paddleDeathAnim.frame >= 7 && paddleDeathAnim.elapsed > PADDLE_DEATH_FRAME_MS * 2) {
-      // keep last frame visible under overlay
     }
   }
   function triggerDeathFX() {
@@ -7316,6 +7348,8 @@
     // Death explode overrides live paddle
     if (paddleDeathAnim) {
       const a = paddleDeathAnim;
+      // último fotograma vacío: nada que dibujar
+      if ((a.frame | 0) >= 8) return;
       const img = paddleExplodeImgs[Math.min(7, Math.max(0, a.frame | 0))];
       if (img && img.naturalWidth) {
         drawPaddleSpriteInRect(img, a.x, a.y, a.w, a.h, false);
