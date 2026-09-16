@@ -177,6 +177,10 @@
   let grabOffsetX = 0;
   let grabOffsetY = 0;
   let pointerDragging = false;
+  let paddleVx = 0;
+  let paddleVy = 0;
+  let paddlePrevX = null;
+  let paddlePrevY = null;
   const keysHeld = Object.create(null);
   let lastTs = 0;
   // ========== ADDICTION / JUICE (MVP) ==========
@@ -1262,6 +1266,62 @@
     clampPaddle();
     resolvePaddleVsBricks();
   }
+
+  /** Velocidad de pala en las mismas unidades que ball.vx (px por frame @60). */
+  function samplePaddleVelocity(dt) {
+    if (!paddle) { paddleVx = 0; paddleVy = 0; return; }
+    const t = Math.max(1 / 240, dt || 1 / 60);
+    if (paddlePrevX == null) {
+      paddlePrevX = paddle.x;
+      paddlePrevY = paddle.y;
+      paddleVx = 0;
+      paddleVy = 0;
+      return;
+    }
+    const instX = (paddle.x - paddlePrevX) / (t * 60);
+    const instY = (paddle.y - paddlePrevY) / (t * 60);
+    paddleVx = paddleVx * 0.5 + instX * 0.5;
+    paddleVy = paddleVy * 0.5 + instY * 0.5;
+    if (Math.abs(paddleVx) < 0.02) paddleVx = 0;
+    if (Math.abs(paddleVy) < 0.02) paddleVy = 0;
+    paddlePrevX = paddle.x;
+    paddlePrevY = paddle.y;
+  }
+  /** Rebote con "english": hereda rapidez y dirección de la pala. */
+  function bounceWithPaddleEnglish(obj, fromAbove) {
+    const hit = (obj.x - (paddle.x + paddle.w / 2)) / (Math.max(8, paddle.w) / 2);
+    const hitClamped = Math.max(-1, Math.min(1, hit));
+    const swipe = Math.max(-1.6, Math.min(1.6, paddleVx * 0.22));
+    const ang = fromAbove
+      ? (-Math.PI / 2 + hitClamped * 1.05 + swipe * 0.62)
+      : (Math.PI / 2 - hitClamped * 1.05 - swipe * 0.62);
+    const baseSp = Math.max(obj.speed || 0, Math.hypot(obj.vx || 0, obj.vy || 0), 3.2);
+    const paddleSp = Math.hypot(paddleVx, paddleVy);
+    const boost = Math.min(4.2, paddleSp * 0.48);
+    const into = fromAbove ? Math.max(0, -paddleVy) : Math.max(0, paddleVy);
+    const intoBoost = Math.min(2.4, into * 0.4);
+    let vx = Math.cos(ang) * (baseSp + boost * 0.45) + paddleVx * 0.62;
+    let vy = Math.sin(ang) * (baseSp + boost * 0.35) + paddleVy * 0.32;
+    if (fromAbove) vy -= intoBoost;
+    else vy += intoBoost;
+    if (fromAbove && vy > -1.8) vy = -1.8 - paddleSp * 0.1;
+    if (!fromAbove && vy < 1.8) vy = 1.8 + paddleSp * 0.1;
+    let nsp = Math.hypot(vx, vy);
+    const minSp = 3.2;
+    const maxSp = 12.2;
+    if (nsp < minSp) {
+      const s = minSp / Math.max(1e-4, nsp);
+      vx *= s; vy *= s; nsp = minSp;
+    } else if (nsp > maxSp) {
+      const s = maxSp / nsp;
+      vx *= s; vy *= s; nsp = maxSp;
+    }
+    obj.vx = vx;
+    obj.vy = vy;
+    obj.speed = nsp;
+    return Math.atan2(vy, vx);
+  }
+
   function trackPaddlePointer() {
     applyPaddleFromPointer();
   }
@@ -5589,13 +5649,16 @@
     if (level().queenBoss && (l8Intro || l8Phase === 'intro')) return;
     launched = true;
     hint.classList.remove('show');
-    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.65;
     if (!(ball.speed > 0.5)) {
       ball.speed = Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * effectiveBallSpeedMult();
     }
-    ball.vx = Math.cos(angle) * ball.speed;
+    const swipe = Math.max(-1.2, Math.min(1.2, paddleVx * 0.2));
+    const angle = -Math.PI / 2 + swipe * 0.7 + (Math.abs(paddleVx) < 0.4 ? (Math.random() - 0.5) * 0.35 : 0);
+    ball.vx = Math.cos(angle) * ball.speed + paddleVx * 0.45;
     ball.vy = Math.sin(angle) * ball.speed;
-    ballLastAng = angle;
+    if (ball.vy > -2) ball.vy = -2;
+    ball.speed = Math.hypot(ball.vx, ball.vy);
+    ballLastAng = Math.atan2(ball.vy, ball.vx);
     ballStallT = 0;
   }
 
@@ -6254,11 +6317,8 @@
         b.x <= paddle.x + paddle.w + 4
       ) {
         b.y = paddle.y - b.r - 0.5;
-        const hit = (b.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
-        const ang = -Math.PI / 2 + Math.max(-1, Math.min(1, hit)) * 0.95;
-        const sp = 6.2 * 1.2; // +20% rebote
-        b.vx = Math.cos(ang) * sp;
-        b.vy = Math.sin(ang) * sp;
+        if (b.speed == null) b.speed = 7.44;
+        bounceWithPaddleEnglish(b, true);
         b.reflected = true;
         spawnMetalSparks(b.x, paddle.y);
       }
@@ -6948,6 +7008,7 @@
       // paddle still tracks
       trackPaddlePointer();
       movePaddleKeyboard(dt);
+      samplePaddleVelocity(dt);
       if (ball && paddle) stickBallToPaddle();
       return;
     }
@@ -6980,6 +7041,7 @@
       // paddle track during fade
       trackPaddlePointer();
       movePaddleKeyboard(dt);
+      samplePaddleVelocity(dt);
       if (ball && paddle) stickBallToPaddle();
       updateBg(dt * 0.4);
       return;
@@ -7139,6 +7201,7 @@
     const prevPy = paddle.y;
     trackPaddlePointer();
     movePaddleKeyboard(dt);
+    samplePaddleVelocity(dt);
     const moved = Math.abs(paddle.x - prevPx) + Math.abs(paddle.y - prevPy);
     if (moved > 0.4) {
       paddleTrail.push({
@@ -7215,19 +7278,10 @@
         ball.x >= paddle.x - 2 &&
         ball.x <= paddle.x + paddle.w + 2
       ) {
-        const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
-        const hitClamped = Math.max(-1, Math.min(1, hit));
         const fromAbove = ball.y < paddle.y + paddle.h * 0.5;
-        // Desde arriba: rebote hacia arriba; desde abajo: hacia abajo (pala libre)
-        const ang = fromAbove
-          ? (-Math.PI / 2 + hitClamped * 1.05)
-          : (Math.PI / 2 - hitClamped * 1.05);
-        const sp = Math.max(ball.speed || 0, Math.hypot(ball.vx, ball.vy), 3.2);
         if (fromAbove) ball.y = paddle.y - ball.r - 0.5;
         else ball.y = paddle.y + paddle.h + ball.r + 0.5;
-        ball.vx = Math.cos(ang) * sp;
-        ball.vy = Math.sin(ang) * sp;
-        ball.speed = Math.max(ball.speed || 0, sp);
+        const ang = bounceWithPaddleEnglish(ball, fromAbove);
         ballLastAng = ang;
         ballStallT = 0;
         spawnMetalSparks(ball.x, fromAbove ? paddle.y : paddle.y + paddle.h);
