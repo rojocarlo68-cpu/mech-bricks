@@ -174,7 +174,460 @@
   restorePersistedScore();
   let pointerX = null;
   let pointerY = null;
+  let grabOffsetX = 0;
+  let grabOffsetY = 0;
+  let pointerDragging = false;
+  const keysHeld = Object.create(null);
   let lastTs = 0;
+  // ========== ADDICTION / JUICE (MVP) ==========
+  let comboCount = 0;
+  let comboMult = 1;
+  let comboFlashT = 0;
+  let nearMissCd = 0;
+  let hitStopT = 0;
+  let coinFly = [];
+  let scoreBumpT = 0;
+  let levelStartMs = 0;
+  let reviveOfferPending = false;
+  let reviveUsedThisLife = false;
+  const REVIVE_COST = 500;
+  let dailyWinStreak = 0;
+  let victoryStreak = 0;
+  let ownedSkins = { paddle: true };
+  let bestRecords = {}; // levelId -> { time, money }
+  let dailyBadge = false;
+  let dailyMutators = null; // { paddleScale, ballSpeed, moneyMult, label }
+  let dailyChestBought = '';
+  let dailyDealId = null;
+  let dailyDealDate = '';
+  let softFailVisible = false;
+  let audioCtx = null;
+  let audioUnlocked = false;
+  let phaseBarEl = null;
+  let comboHudEl = null;
+  let powerBarsEl = null;
+  let recordHudEl = null;
+
+  const LS_STREAK = 'mechBricksDailyStreak_v1';
+  const LS_VICTORY = 'mechBricksVictoryStreak_v1';
+  const LS_SKINS = 'mechBricksSkins_v1';
+  const LS_RECORDS = 'mechBricksRecords_v1';
+  const LS_DAILY_BADGE = 'mechBricksDailyBadge_v1';
+  const LS_DAILY_CHEST = 'mechBricksDailyChest_v1';
+  const LS_DAILY_DEAL = 'mechBricksDailyDeal_v1';
+
+  function todayKey() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function hashStr(s) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+  function loadAddictionMeta() {
+    try {
+      dailyWinStreak = parseInt(localStorage.getItem(LS_STREAK) || '0', 10) || 0;
+      victoryStreak = parseInt(localStorage.getItem(LS_VICTORY) || '0', 10) || 0;
+      const sk = JSON.parse(localStorage.getItem(LS_SKINS) || '{}');
+      ownedSkins = Object.assign({ paddle: true }, sk && typeof sk === 'object' ? sk : {});
+      bestRecords = JSON.parse(localStorage.getItem(LS_RECORDS) || '{}') || {};
+      const badge = JSON.parse(localStorage.getItem(LS_DAILY_BADGE) || 'null');
+      dailyBadge = !!(badge && badge.date === todayKey());
+      dailyChestBought = localStorage.getItem(LS_DAILY_CHEST) || '';
+      const deal = JSON.parse(localStorage.getItem(LS_DAILY_DEAL) || 'null');
+      if (deal && deal.date === todayKey()) {
+        dailyDealDate = deal.date;
+        dailyDealId = deal.id;
+      }
+    } catch (_) {}
+  }
+  function persistSkins() {
+    try { localStorage.setItem(LS_SKINS, JSON.stringify(ownedSkins)); } catch (_) {}
+  }
+  function persistRecords() {
+    try { localStorage.setItem(LS_RECORDS, JSON.stringify(bestRecords)); } catch (_) {}
+  }
+  function unlockAudio() {
+    if (audioUnlocked) return;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      audioUnlocked = true;
+    } catch (_) { audioUnlocked = false; }
+  }
+  function playTone(freq, dur, type, gain) {
+    try {
+      if (!audioCtx) return;
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type || 'square';
+      o.frequency.value = freq;
+      g.gain.value = gain != null ? gain : 0.04;
+      o.connect(g); g.connect(audioCtx.destination);
+      const t0 = audioCtx.currentTime;
+      g.gain.setValueAtTime(g.gain.value, t0);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + (dur || 0.08));
+      o.start(t0); o.stop(t0 + (dur || 0.08) + 0.02);
+    } catch (_) {}
+  }
+  function sfxHit() { playTone(220 + Math.min(400, comboCount * 18), 0.05, 'triangle', 0.035); }
+  function sfxCombo() { playTone(320 + comboCount * 40, 0.09, 'sawtooth', 0.04); }
+  function sfxNearMiss() { playTone(140, 0.12, 'sine', 0.03); playTone(90, 0.1, 'triangle', 0.02); }
+  function sfxPhase() { playTone(180, 0.15, 'square', 0.05); setTimeout(() => playTone(260, 0.18, 'square', 0.045), 80); }
+  function sfxCoin() { playTone(880, 0.06, 'sine', 0.03); }
+
+  function ensureJuiceHud() {
+    if (!phaseBarEl) {
+      phaseBarEl = document.getElementById('phaseBar');
+      comboHudEl = document.getElementById('comboHud');
+      powerBarsEl = document.getElementById('powerBars');
+      recordHudEl = document.getElementById('recordHud');
+    }
+  }
+  function comboMultiplier() {
+    return Math.min(5, 1 + Math.floor(comboCount / 5));
+  }
+  function registerBrickHitMoney(base) {
+    comboCount++;
+    comboMult = comboMultiplier();
+    comboFlashT = 0.9;
+    if (comboCount > 1 && comboCount % 5 === 0) {
+      bumpCam(1.2 + comboMult * 0.35);
+      sfxCombo();
+      spawnMetalSparks(paddle ? paddle.x + paddle.w / 2 : W / 2, paddle ? paddle.y : H * 0.8);
+    } else {
+      sfxHit();
+    }
+    const gain = Math.max(0, Math.round(base * comboMult * (dailyMutators ? dailyMutators.moneyMult : 1)));
+    return gain;
+  }
+  function resetCombo() {
+    comboCount = 0;
+    comboMult = 1;
+    comboFlashT = 0;
+  }
+  function triggerHitStop(ms) {
+    hitStopT = Math.max(hitStopT, (ms || 50) / 1000);
+  }
+  function spawnCoinFly(x, y, n) {
+    const count = Math.min(8, n || 3);
+    for (let i = 0; i < count; i++) {
+      coinFly.push({
+        x: x + (Math.random() - 0.5) * 18,
+        y: y + (Math.random() - 0.5) * 12,
+        tx: W - 36,
+        ty: 28,
+        t: 0,
+        dur: 0.55 + Math.random() * 0.25,
+        life: 1,
+      });
+    }
+    if (coinFly.length > 40) coinFly.splice(0, coinFly.length - 40);
+    sfxCoin();
+  }
+  function updateCoinFly(dt) {
+    for (let i = coinFly.length - 1; i >= 0; i--) {
+      const c = coinFly[i];
+      c.t += dt;
+      const u = Math.min(1, c.t / c.dur);
+      const e = 1 - Math.pow(1 - u, 3);
+      c.cx = c.x + (c.tx - c.x) * e;
+      c.cy = c.y + (c.ty - c.y) * e;
+      if (u >= 1) {
+        coinFly.splice(i, 1);
+        scoreBumpT = 0.35;
+      }
+    }
+  }
+  function drawCoinFly() {
+    if (!coinFly.length) return;
+    ctx.save();
+    for (const c of coinFly) {
+      const x = c.cx != null ? c.cx : c.x;
+      const y = c.cy != null ? c.cy : c.y;
+      ctx.font = '16px system-ui';
+      ctx.globalAlpha = 0.9;
+      ctx.fillText('💵', x - 8, y + 6);
+    }
+    ctx.restore();
+  }
+  function checkNearMiss(dt) {
+    if (!ball || !paddle || !launched || gameOver || nearMissCd > 0) {
+      if (nearMissCd > 0) nearMissCd -= dt;
+      return;
+    }
+    // Ball passed beside paddle edge without overlap
+    const padMidY = paddle.y + paddle.h * 0.5;
+    const vertNear = Math.abs(ball.y - padMidY) < paddle.h * 0.85 + ball.r;
+    if (!vertNear) return;
+    const leftDist = paddle.x - (ball.x + ball.r);
+    const rightDist = (ball.x - ball.r) - (paddle.x + paddle.w);
+    const thresh = paddle.w * 0.35;
+    let side = 0;
+    if (leftDist > 0 && leftDist < thresh) side = -1;
+    else if (rightDist > 0 && rightDist < thresh) side = 1;
+    if (!side) return;
+    // Only when ball is moving past (downward-ish or crossing)
+    if (ball.vy < -0.5 && ball.y + ball.r < paddle.y) return;
+    nearMissCd = 0.85;
+    sfxNearMiss();
+    const hx = side < 0 ? paddle.x : paddle.x + paddle.w;
+    spawnDust(hx, paddle.y + paddle.h * 0.5, 'rgb(180,220,255)', 10, { spread: 1.4, up: 1.2 });
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Casi!</strong><span>Por poco…</span>';
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => {
+      if (launched && !gameOver && !paused) hint.classList.remove('show');
+    }, 700);
+  }
+  function l8PhaseLabel() {
+    if (!level().queenBoss) return '';
+    if (l8Phase === 'hands' || l8Phase === 'intro') return 'Fase: Manos';
+    if (l8Phase === 'head') return 'Fase: Cabeza';
+    if (l8Phase === 'torso' && l8TorsoStage === 'chest') return 'Fase: Pecho';
+    if (l8Phase === 'torso' && l8TorsoStage === 'armor') return 'Fase: Armadura';
+    return '';
+  }
+  function updateAddictionHud() {
+    ensureJuiceHud();
+    if (comboHudEl) {
+      if (comboCount >= 2) {
+        comboHudEl.textContent = 'COMBO x' + comboMult + (comboCount > 5 ? ' · ' + comboCount : '');
+        comboHudEl.classList.add('show');
+      } else comboHudEl.classList.remove('show');
+    }
+    if (phaseBarEl) {
+      const start = structureStartCount || 1;
+      const left = structureCount || 0;
+      const pct = Math.max(0, Math.min(100, Math.round((left / start) * 100)));
+      const label = l8PhaseLabel();
+      const fill = phaseBarEl.querySelector('.phase-fill');
+      const txt = phaseBarEl.querySelector('.phase-label');
+      if (fill) fill.style.width = pct + '%';
+      if (txt) txt.textContent = (label ? label + ' · ' : '') + pct + '% resto';
+      phaseBarEl.classList.toggle('show', start > 1 || !!label);
+    }
+    if (powerBarsEl) {
+      const now = performance.now();
+      let html = '';
+      if (bigPaddleUntil && now < bigPaddleUntil) {
+        const left = Math.max(0, (bigPaddleUntil - now) / 20000);
+        html += `<div class="pwr"><span>Paleta+</span><div class="pwr-track"><div style="width:${(left*100)|0}%"></div></div></div>`;
+      }
+      if (laserCannonsActive && laserExpireAt && now < laserExpireAt) {
+        const left = Math.max(0, (laserExpireAt - now) / (LASER_TOTAL_S * 1000));
+        html += `<div class="pwr laser"><span>Láser</span><div class="pwr-track"><div style="width:${(left*100)|0}%"></div></div></div>`;
+      }
+      powerBarsEl.innerHTML = html;
+      powerBarsEl.classList.toggle('show', !!html);
+    }
+    if (recordHudEl) {
+      const rec = bestRecords[String(level().id)];
+      if (rec && rec.time != null) {
+        recordHudEl.textContent = 'Récord Nv' + level().id + ': ' + (rec.time | 0) + 's';
+        recordHudEl.classList.add('show');
+      } else recordHudEl.classList.remove('show');
+    }
+    if (scoreBumpT > 0 && scoreEl) {
+      scoreEl.style.transform = 'scale(1.12)';
+      scoreEl.style.transition = 'transform 0.12s ease';
+    } else if (scoreEl) {
+      scoreEl.style.transform = '';
+    }
+  }
+  function drawAddictionCanvas() {
+    drawCoinFly();
+    if (comboFlashT > 0 && comboCount >= 2) {
+      ctx.save();
+      ctx.font = 'bold 22px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = `rgba(255,210,90,${Math.min(1, comboFlashT)})`;
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.lineWidth = 3;
+      const label = 'COMBO x' + comboMult;
+      ctx.strokeText(label, W * 0.5, 54);
+      ctx.fillText(label, W * 0.5, 54);
+      ctx.restore();
+    }
+  }
+  function noteLevelStart() {
+    levelStartMs = performance.now();
+    resetCombo();
+    reviveOfferPending = false;
+    reviveUsedThisLife = false;
+    hideSoftFail();
+    updateAddictionHud();
+  }
+  function recordLevelClear() {
+    const elapsed = levelStartMs ? (performance.now() - levelStartMs) / 1000 : 0;
+    const id = String(level().id);
+    const prev = bestRecords[id] || {};
+    const next = {
+      time: prev.time != null ? Math.min(prev.time, elapsed) : elapsed,
+      money: Math.max(prev.money || 0, score | 0),
+    };
+    bestRecords[id] = next;
+    persistRecords();
+    victoryStreak = (victoryStreak | 0) + 1;
+    try { localStorage.setItem(LS_VICTORY, String(victoryStreak)); } catch (_) {}
+    // daily win streak
+    try {
+      const raw = JSON.parse(localStorage.getItem(LS_STREAK + '_meta') || 'null');
+      const today = todayKey();
+      let streak = dailyWinStreak | 0;
+      if (raw && raw.date === today) {
+        // already counted today
+      } else if (raw && raw.date) {
+        const prev = new Date(raw.date + 'T12:00:00');
+        const cur = new Date(today + 'T12:00:00');
+        const diff = Math.round((cur - prev) / 86400000);
+        streak = diff === 1 ? streak + 1 : 1;
+      } else streak = 1;
+      dailyWinStreak = streak;
+      localStorage.setItem(LS_STREAK, String(streak));
+      localStorage.setItem(LS_STREAK + '_meta', JSON.stringify({ date: today }));
+    } catch (_) {}
+    if (dailyMutators) {
+      dailyBadge = true;
+      try { localStorage.setItem(LS_DAILY_BADGE, JSON.stringify({ date: todayKey() })); } catch (_) {}
+    }
+  }
+  function initDailyDeal() {
+    const today = todayKey();
+    if (dailyDealDate === today && dailyDealId) return;
+    const h = hashStr(today + ':deal');
+    const pool = SHOP.filter((it) => it.ballPower == null);
+    dailyDealId = pool[h % pool.length].id;
+    dailyDealDate = today;
+    try { localStorage.setItem(LS_DAILY_DEAL, JSON.stringify({ date: today, id: dailyDealId })); } catch (_) {}
+  }
+  function shopPrice(it) {
+    initDailyDeal();
+    if (it.id === dailyDealId) return Math.max(1, Math.round(it.price * 0.8));
+    return it.price;
+  }
+  function buyMysteryChest() {
+    const today = todayKey();
+    if (dailyChestBought === today) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Cofre</strong><span>Ya lo abriste hoy</span>';
+      return;
+    }
+    if (backpack.length >= PACK_MAX) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Mochila llena</strong><span>Libera un espacio</span>';
+      return;
+    }
+    const cost = 350;
+    if (score < cost) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Sin fondos</strong><span>Necesitas $' + cost + '</span>';
+      return;
+    }
+    score -= cost;
+    const cheap = SHOP.filter((s) => s.ballPower == null && s.price <= 2200);
+    const h = hashStr(today + ':chest:' + (score | 0));
+    const pick = cheap[h % cheap.length];
+    backpack.push(pick.id);
+    dailyChestBought = today;
+    try { localStorage.setItem(LS_DAILY_CHEST, today); } catch (_) {}
+    updateHud();
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>🎁 Cofre misterioso</strong><span>Obtuviste: ' + pick.name + '</span>';
+    renderShop();
+  }
+  function applyDailyChallenge(force) {
+    const q = new URLSearchParams(location.search);
+    if (!force && q.get('daily') !== '1' && !window.__dailyForce) {
+      dailyMutators = null;
+      return;
+    }
+    window.__dailyForce = true;
+    const today = todayKey();
+    const h = hashStr(today + ':daily');
+    const modes = [
+      { paddleScale: 0.82, ballSpeed: 1.12, moneyMult: 2, label: 'Paleta chica · bola rápida · x2$' },
+      { paddleScale: 0.9, ballSpeed: 1.2, moneyMult: 2, label: 'Bola veloz · x2$' },
+      { paddleScale: 0.75, ballSpeed: 1.05, moneyMult: 2.5, label: 'Paleta mínima · x2.5$' },
+      { paddleScale: 0.88, ballSpeed: 1.15, moneyMult: 1.5, label: 'Desafío mixto · x1.5$' },
+    ];
+    dailyMutators = modes[h % modes.length];
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>Desafío diario</strong><span>' + dailyMutators.label + '</span>';
+  }
+  function effectivePaddleScale() {
+    let s = levelPaddleScale();
+    if (dailyMutators) s *= dailyMutators.paddleScale;
+    return s;
+  }
+  function effectiveBallSpeedMult() {
+    let m = levelBallSpeedMult();
+    if (dailyMutators) m *= dailyMutators.ballSpeed;
+    return m;
+  }
+  function showSoftFail() {
+    softFailVisible = true;
+    const el = document.getElementById('softFail');
+    if (!el) return;
+    const canRevive = !reviveUsedThisLife && score >= REVIVE_COST;
+    el.querySelector('[data-act="revive"]').style.display = canRevive ? '' : 'none';
+    el.querySelector('[data-act="revive"]').textContent = 'Revivir ($' + REVIVE_COST + ')';
+    el.classList.add('show');
+    el.setAttribute('aria-hidden', 'false');
+  }
+  function hideSoftFail() {
+    softFailVisible = false;
+    const el = document.getElementById('softFail');
+    if (!el) return;
+    el.classList.remove('show');
+    el.setAttribute('aria-hidden', 'true');
+  }
+  function tryRevive() {
+    if (reviveUsedThisLife) return false;
+    if (score < REVIVE_COST) return false;
+    score -= REVIVE_COST;
+    reviveUsedThisLife = true;
+    reviveOfferPending = false;
+    gameOver = false;
+    lives = Math.max(1, lives);
+    launched = false;
+    deathGlitch = 0;
+    gameOverHintPending = false;
+    hideSoftFail();
+    stickBallToPaddle();
+    updateHud();
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>¡Reviviste!</strong><span>Toca para lanzar</span>';
+    return true;
+  }
+  function renderCollectionHtml() {
+    const ballIds = SHOP.filter((s) => s.ballPower != null).map((s) => s.id);
+    const rows = [
+      { id: 'paddle', name: 'Paleta clásica', owned: !!ownedSkins.paddle },
+      ...ballIds.map((id) => {
+        const it = SHOP.find((s) => s.id === id);
+        return { id, name: it ? it.name : id, owned: !!ownedSkins[id] || activeBallSkin === id };
+      }),
+    ];
+    return '<div class="collection"><h3>Colección</h3>' + rows.map((r) =>
+      `<div class="col-row ${r.owned ? 'owned' : 'locked'}">${r.owned ? '✓' : '🔒'} ${r.name}</div>`
+    ).join('') + '</div>';
+  }
+  function markSkinOwned(id) {
+    if (!id) return;
+    ownedSkins[id] = true;
+    persistSkins();
+  }
+  loadAddictionMeta();
+  applyDailyChallenge(false);
+
+
   let particles = [];
   let paddleImg = null;
   let paddleLaserImg = null;
@@ -555,6 +1008,7 @@
     if (shopMoney) shopMoney.textContent = moneyTxt;
     if (packMoney) packMoney.textContent = moneyTxt;
     renderLives();
+    try { updateAddictionHud(); } catch (_) {}
   }
 
   function stickBallToPaddle() {
@@ -585,9 +1039,9 @@
     return Math.max(26, Math.min(h, Math.max(52, w * 0.48)));
   }
 
-  /** Banda vertical libre: ~28% altura hasta casi el suelo */
+  /** Vertical casi completo: solo margen de 8px. */
   function paddleYMin() {
-    return Math.max(8, H * 0.28);
+    return 8;
   }
   function paddleYMax() {
     return H - 8 - (paddle ? paddle.h : 20);
@@ -597,12 +1051,107 @@
     paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
     paddle.y = Math.max(paddleYMin(), Math.min(paddleYMax(), paddle.y));
   }
-  /** Sigue el puntero en X e Y (centro de la pala). */
-  function trackPaddlePointer() {
-    if (!paddle) return;
-    if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
-    if (pointerY != null) paddle.y = pointerY - paddle.h / 2;
+  /** Empuja la pala fuera de ladrillos vivos (eje de menor solape). */
+  function resolvePaddleVsBricks() {
+    if (!paddle || !cols || !rows || !cellScreen) return;
+    const padL = paddle.x, padT = paddle.y;
+    const padR = paddle.x + paddle.w, padB = paddle.y + paddle.h;
+    const ox = originX + (structureDX || 0);
+    const oy = originY + (structureDY || 0);
+    const cs = cellScreen;
+    const ix0 = Math.max(0, Math.floor((padL - ox) / cs) - 1);
+    const iy0 = Math.max(0, Math.floor((padT - oy) / cs) - 1);
+    const ix1 = Math.min(cols - 1, Math.ceil((padR - ox) / cs) + 1);
+    const iy1 = Math.min(rows - 1, Math.ceil((padB - oy) / cs) + 1);
+
+    function pushOut(br) {
+      if (!br || !br.alive || br.falling || br.settled) return;
+      const bl = br.x, bt = br.y, brR = br.x + br.w, bb = br.y + br.h;
+      if (padR <= bl || padL >= brR || padB <= bt || padT >= bb) return;
+      const overlapX = Math.min(padR, brR) - Math.max(padL, bl);
+      const overlapY = Math.min(padB, bb) - Math.max(padT, bt);
+      if (overlapX <= 0 || overlapY <= 0) return;
+      if (overlapX < overlapY) {
+        const mid = (padL + padR) * 0.5;
+        const bmid = (bl + brR) * 0.5;
+        if (mid < bmid) paddle.x -= overlapX;
+        else paddle.x += overlapX;
+      } else {
+        const mid = (padT + padB) * 0.5;
+        const bmid = (bt + bb) * 0.5;
+        if (mid < bmid) paddle.y -= overlapY;
+        else paddle.y += overlapY;
+      }
+    }
+
+    function scanGrid(g) {
+      if (!g) return;
+      for (let iy = iy0; iy <= iy1; iy++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const id = g[iy * cols + ix];
+          if (id < 0) continue;
+          const br = bricks[id];
+          if (br) pushOut(br);
+        }
+      }
+    }
+
+    if (level().dualLayer) {
+      scanGrid(gridLower);
+      scanGrid(gridUpper);
+    } else if (structures && structures.length) {
+      for (const S of structures) {
+        if (!S || !S.grid || !S.bricks) continue;
+        const sox = (S.originX != null ? S.originX : originX) + (S.structureDX || 0);
+        const soy = (S.originY != null ? S.originY : originY) + (S.structureDY || 0);
+        const scs = S.cellScreen || cellScreen;
+        const scols = S.cols || cols;
+        const srows = S.rows || rows;
+        const six0 = Math.max(0, Math.floor((paddle.x - sox) / scs) - 1);
+        const siy0 = Math.max(0, Math.floor((paddle.y - soy) / scs) - 1);
+        const six1 = Math.min(scols - 1, Math.ceil((paddle.x + paddle.w - sox) / scs) + 1);
+        const siy1 = Math.min(srows - 1, Math.ceil((paddle.y + paddle.h - soy) / scs) + 1);
+        for (let iy = siy0; iy <= siy1; iy++) {
+          for (let ix = six0; ix <= six1; ix++) {
+            const id = S.grid[iy * scols + ix];
+            if (id < 0) continue;
+            const br = S.bricks[id];
+            if (br) pushOut(br);
+          }
+        }
+      }
+    } else {
+      scanGrid(grid);
+    }
+    // Reclamp after push (never leave canvas)
     clampPaddle();
+  }
+  /** Drag relativo + teclado; aplica X e Y; nunca fuerza Y al suelo. */
+  function applyPaddleFromPointer() {
+    if (!paddle) return;
+    if (!pointerDragging) return;
+    if (pointerX != null) paddle.x = pointerX - grabOffsetX;
+    if (pointerY != null) paddle.y = pointerY - grabOffsetY;
+    clampPaddle();
+    resolvePaddleVsBricks();
+  }
+  function trackPaddlePointer() {
+    applyPaddleFromPointer();
+  }
+  function movePaddleKeyboard(dt) {
+    if (!paddle || paused || gameOver) return;
+    const speed = Math.max(280, W * 0.55);
+    let dx = 0, dy = 0;
+    if (keysHeld.ArrowLeft || keysHeld.a || keysHeld.A) dx -= 1;
+    if (keysHeld.ArrowRight || keysHeld.d || keysHeld.D) dx += 1;
+    if (keysHeld.ArrowUp || keysHeld.w || keysHeld.W) dy -= 1;
+    if (keysHeld.ArrowDown || keysHeld.s || keysHeld.S) dy += 1;
+    if (!dx && !dy) return;
+    // Si hay pointer activo, teclado suma encima
+    paddle.x += dx * speed * dt;
+    paddle.y += dy * speed * dt;
+    clampPaddle();
+    resolvePaddleVsBricks();
   }
   /** Al cambiar ancho/alto, conserva el centro. */
   function resizePaddleKeepCenter(newW, newH) {
@@ -614,6 +1163,7 @@
     paddle.x = cx - paddle.w / 2;
     paddle.y = cy - paddle.h / 2;
     clampPaddle();
+    resolvePaddleVsBricks();
   }
 
 
@@ -1191,13 +1741,18 @@
     launched = false;
     bombs = [];
     const hasNext = levelIndex + 1 < LEVELS.length;
+    try { recordLevelClear(); } catch (_) {}
+    try { sfxPhase(); } catch (_) {}
     if (hasNext) {
       const nextName = LEVELS[levelIndex + 1].name;
+      const nextId = LEVELS[levelIndex + 1].id;
       hint.classList.add('show');
-      hint.innerHTML = `<strong>¡Mech destruido!</strong><span>Siguiente: ${nextName} · Toca o espera</span>`;
+      hint.innerHTML = `<strong>¡Mech destruido!</strong><span>Algo se acerca… ${nextName} · Toca o espera</span>`;
+      // Silueta teaser en HUD
+      if (countEl) countEl.textContent = `Siguiente → Nv${nextId} · ¿Listo?`;
       updateHud();
       window.__gotoNext = true;
-      setTimeout(() => { if (window.__gotoNext) startNextLevel(); }, 2200);
+      setTimeout(() => { if (window.__gotoNext) startNextLevel(); }, 2400);
     } else {
       won = true;
       window.__gotoNext = false;
@@ -3060,7 +3615,7 @@
   function applyL8ArmorFeel() {
     // Paddle -2%, bola +2% solo en resto de armadura
     if (!paddle) return;
-    basePaddleW = Math.min(168, W * 0.42) * levelPaddleScale();
+    basePaddleW = Math.min(168, W * 0.42) * effectivePaddleScale();
     const nw = (bigPaddleUntil && performance.now() < bigPaddleUntil) ? basePaddleW * 1.35 : basePaddleW;
     resizePaddleKeepCenter(nw, paddleHeightForWidth(nw));
     if (ball) {
@@ -4002,7 +4557,7 @@
       l8DebrisTimer = 0.8 + Math.random() * 0.7;
       launched = false;
       clearLaserCannons();
-      basePaddleW = Math.min(168, W * 0.42) * levelPaddleScale();
+      basePaddleW = Math.min(168, W * 0.42) * effectivePaddleScale();
       const pw = basePaddleW;
       const ph = paddleHeightForWidth(pw);
       paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
@@ -4016,7 +4571,7 @@
       ball = {
         r,
         x: 0, y: 0, vx: 0, vy: 0,
-        speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult(),
+        speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * effectiveBallSpeedMult(),
       };
       stickBallToPaddle();
       if (l8BootSkipToTorso) {
@@ -4035,6 +4590,7 @@
         l8LasersDone = true;
         l8Fade = null;
         updateHud();
+        try { noteLevelStart(); } catch (_) {}
         running = true;
         window.__l8TorsoBootSkipFade = true;
         beginL8TorsoPhase(false);
@@ -4064,6 +4620,7 @@
         l8LaserCd = 0;
         l8LasersDone = false;
         updateHud();
+        try { noteLevelStart(); } catch (_) {}
         running = true;
         beginL8HeadPhase();
         return;
@@ -4082,6 +4639,7 @@
       hint.classList.add('show');
       hint.innerHTML = '<strong>La Reina…</strong><span>Una presencia colosal</span>';
       updateHud();
+      try { noteLevelStart(); } catch (_) {}
       running = true;
       return;
     }
@@ -4196,7 +4754,7 @@
     updateHud();
 
     clearLaserCannons();
-    basePaddleW = Math.min(168, W * 0.42) * levelPaddleScale();
+    basePaddleW = Math.min(168, W * 0.42) * effectivePaddleScale();
     const pw = basePaddleW;
     const ph = paddleHeightForWidth(pw);
     paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
@@ -4210,12 +4768,13 @@
     ball = {
       r,
       x: 0, y: 0, vx: 0, vy: 0,
-      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult(),
+      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * effectiveBallSpeedMult(),
     };
     stickBallToPaddle();
 
     hint.classList.add('show');
-    hint.innerHTML = '<strong>Desliza la paleta</strong><span>Sin soporte abajo, los ladrillos caen</span>';
+    hint.innerHTML = '<strong>Desliza la paleta en todas direcciones</strong><span>Sin soporte abajo, los ladrillos caen</span>';
+    try { noteLevelStart(); } catch (_) {}
     running = true;
   }
 
@@ -4903,7 +5462,7 @@
     hint.classList.remove('show');
     const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.65;
     if (!(ball.speed > 0.5)) {
-      ball.speed = Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult();
+      ball.speed = Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * effectiveBallSpeedMult();
     }
     ball.vx = Math.cos(angle) * ball.speed;
     ball.vy = Math.sin(angle) * ball.speed;
@@ -5012,7 +5571,8 @@
       if (deathGlitch <= 0 && gameOverHintPending) {
         gameOverHintPending = false;
         hint.classList.add('show');
-        hint.innerHTML = '<strong>Game over</strong><span>Pulsa Reiniciar</span>';
+        hint.innerHTML = '<strong>Game over</strong><span>Elige una opción</span>';
+        showSoftFail();
       }
     }
   }
@@ -5117,8 +5677,10 @@
     launched = false;
     bombs = [];
     clearLaserCannons();
+    resetCombo();
     triggerDeathFX();
     updateHud();
+    try { victoryStreak = 0; localStorage.setItem(LS_VICTORY, '0'); } catch (_) {}
     return true;
   }
 
@@ -5130,14 +5692,23 @@
       setTimeout(() => { if (!paused) hint.classList.remove('show'); }, 900);
       return;
     }
+    resetCombo();
+    reviveUsedThisLife = false;
     lives = Math.max(0, lives - 1);
     triggerHurtFX(true);
     updateHud();
     if (checkGameOver()) return;
     launched = false;
     stickBallToPaddle();
-    hint.classList.add('show');
-    hint.innerHTML = '<strong>Vida perdida</strong><span>Toca para lanzar de nuevo</span>';
+    // Oferta de revive barata una vez por pérdida si hay fondos
+    if (!reviveUsedThisLife && score >= REVIVE_COST) {
+      reviveOfferPending = true;
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Vida perdida</strong><span>Revivir $' + REVIVE_COST + ' o toca para lanzar</span>';
+    } else {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Vida perdida</strong><span>Toca para lanzar de nuevo</span>';
+    }
   }
 
   function loseQuarterLife() {
@@ -5226,12 +5797,17 @@
       if (isL8ArmorRest()) dmg *= 1.953125; // -20%×3 dureza acumulada
       br.hp -= dmg;
     }
-    score += 1; // $1 por golpe
-    if (br.hp <= 0) {
-      destroyBrick(br, 0);
-    } else {
-      drawBrickToLayer(br);
-      updateHud();
+    {
+      const gain = registerBrickHitMoney(1);
+      score += gain;
+      triggerHitStop(45);
+      if (br.hp <= 0) {
+        destroyBrick(br, 0);
+        spawnCoinFly(hx, hy, 2 + (comboMult > 2 ? 2 : 0));
+      } else {
+        drawBrickToLayer(br);
+        updateHud();
+      }
     }
     const sp = Math.hypot(ball.vx, ball.vy);
     const minSp = Math.max(3.2, ball.speed || 0);
@@ -5303,7 +5879,13 @@
       score += pts;
       drawBrickToLayer(br);
     }
-    if (hitList.length) recomputeSupport();
+    if (hitList.length) {
+      recomputeSupport();
+      if (hitList.length >= 4) {
+        const mid = hitList[(hitList.length / 2) | 0];
+        spawnCoinFly(mid.x + mid.w / 2, mid.y + mid.h / 2, Math.min(6, 2 + (hitList.length / 8) | 0));
+      }
+    }
     return hitList.length;
   }
 
@@ -6212,6 +6794,7 @@
       updatePlayerBomb(dt);
       // paddle still tracks
       trackPaddlePointer();
+      movePaddleKeyboard(dt);
       if (ball && paddle) stickBallToPaddle();
       return;
     }
@@ -6243,6 +6826,7 @@
       updateL8Fade(dt);
       // paddle track during fade
       trackPaddlePointer();
+      movePaddleKeyboard(dt);
       if (ball && paddle) stickBallToPaddle();
       updateBg(dt * 0.4);
       return;
@@ -6353,6 +6937,7 @@
       const prevPxS = paddle.x;
       const prevPyS = paddle.y;
       trackPaddlePointer();
+      movePaddleKeyboard(dt);
       if (Math.abs(paddle.x - prevPxS) > 0.4 || Math.abs(paddle.y - prevPyS) > 0.4) {
         paddleTrail.push({
           x: paddle.x + paddle.w / 2,
@@ -6396,6 +6981,7 @@
     const prevPx = paddle.x;
     const prevPy = paddle.y;
     trackPaddlePointer();
+    movePaddleKeyboard(dt);
     const moved = Math.abs(paddle.x - prevPx) + Math.abs(paddle.y - prevPy);
     if (moved > 0.4) {
       paddleTrail.push({
@@ -6488,6 +7074,7 @@
         ballLastAng = ang;
         ballStallT = 0;
         spawnMetalSparks(ball.x, fromAbove ? paddle.y : paddle.y + paddle.h);
+        try { triggerHitStop(40); bumpCam(0.35 + Math.min(1.2, comboMult * 0.15)); } catch (_) {}
       }
 
       collideBricksWithBall();
@@ -7215,6 +7802,7 @@
     // Screen-space damage overlays (flash / cracks / death glitch)
     if (level().queenBoss) drawL8EyeFlash();
     drawDamageOverlays();
+    try { drawAddictionCanvas(); } catch (_) {}
   }
 
   function eSeed(u, i) {
@@ -7222,12 +7810,20 @@
   }
 
   function frame(ts) {
-    const dt = Math.min(0.033, (ts - lastTs) / 1000 || 0.016);
+    let dt = Math.min(0.033, (ts - lastTs) / 1000 || 0.016);
     lastTs = ts;
+    if (hitStopT > 0) {
+      hitStopT -= dt;
+      dt = 0; // freeze sim briefly
+    }
     update(dt);
     if (!paused) {
       camShake = Math.max(0, camShake - dt * 6.5);
-      updateDamageFX(dt);
+      updateDamageFX(dt || 0.016);
+      updateCoinFly(dt || 0.016);
+      checkNearMiss(dt || 0.016);
+      if (comboFlashT > 0) comboFlashT = Math.max(0, comboFlashT - (dt || 0.016));
+      if (scoreBumpT > 0) scoreBumpT = Math.max(0, scoreBumpT - (dt || 0.016));
     }
     draw();
     requestAnimationFrame(frame);
@@ -7244,27 +7840,99 @@
 
   function onDown(e) {
     e.preventDefault();
+    try { unlockAudio(); } catch (_) {}
     if (paused) return;
     const p = pointerPos(e);
+    pointerDragging = true;
     pointerX = p.x;
     pointerY = p.y;
+    if (paddle) {
+      grabOffsetX = p.x - paddle.x;
+      grabOffsetY = p.y - paddle.y;
+      // Si tocas lejos de la pala, agarra cerca del centro
+      if (grabOffsetX < -8 || grabOffsetX > paddle.w + 8) grabOffsetX = paddle.w * 0.5;
+      if (grabOffsetY < -8 || grabOffsetY > paddle.h + 8) grabOffsetY = paddle.h * 0.5;
+    } else {
+      grabOffsetX = 0;
+      grabOffsetY = 0;
+    }
+    try {
+      if (e.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+    } catch (_) {}
+    applyPaddleFromPointer();
     if (window.__gotoNext) { startNextLevel(); return; }
     if (!launched && !gameOver && !won && !l6Transit && !(level().queenBoss && l8Intro)) launch();
   }
   function onMove(e) {
     e.preventDefault();
+    if (paused) return;
     const p = pointerPos(e);
     pointerX = p.x;
     pointerY = p.y;
+    if (!pointerDragging && (e.buttons === 0 || e.buttons == null) && !(e.touches && e.touches.length)) {
+      // pointer hover sin drag: no mover
+      return;
+    }
+    pointerDragging = true;
+    applyPaddleFromPointer();
+  }
+  function onUp(e) {
+    pointerDragging = false;
+    try {
+      if (e && e.pointerId != null && canvas.releasePointerCapture) canvas.releasePointerCapture(e.pointerId);
+    } catch (_) {}
   }
 
   canvas.addEventListener('pointerdown', onDown, { passive: false });
   canvas.addEventListener('pointermove', onMove, { passive: false });
+  canvas.addEventListener('pointerup', onUp, { passive: false });
+  canvas.addEventListener('pointercancel', onUp, { passive: false });
   canvas.addEventListener('touchstart', onDown, { passive: false });
   canvas.addEventListener('touchmove', onMove, { passive: false });
+  canvas.addEventListener('touchend', onUp, { passive: false });
+  window.addEventListener('keydown', (e) => {
+    keysHeld[e.key] = true;
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','w','a','s','d','W','A','S','D'].includes(e.key)) e.preventDefault();
+  });
+  window.addEventListener('keyup', (e) => { keysHeld[e.key] = false; });
+
+  (function wireSoftFail() {
+    const el = document.getElementById('softFail');
+    if (!el) return;
+    el.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      e.stopPropagation();
+      const act = btn.getAttribute('data-act');
+      if (act === 'retry') {
+        hideSoftFail();
+        resetBtn.click();
+      } else if (act === 'revive') {
+        if (!tryRevive()) {
+          hint.classList.add('show');
+          hint.innerHTML = '<strong>Sin fondos</strong><span>Necesitas $' + REVIVE_COST + '</span>';
+        }
+      } else if (act === 'menu') {
+        hideSoftFail();
+        paused = true;
+        refreshPauseMeta();
+        setOverlay(pauseOverlay, true);
+      }
+    });
+  })();
+  const btnDaily = document.getElementById('btnDaily');
+  if (btnDaily) {
+    btnDaily.addEventListener('click', () => {
+      applyDailyChallenge(true);
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>Desafío diario ON</strong><span>' + (dailyMutators ? dailyMutators.label : '') + '</span>';
+      refreshPauseMeta();
+    });
+  }
 
   resetBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    hideSoftFail();
     window.__gotoNext = false;
     // Salir de estados que dejan la pantalla rara / trabada
     paused = false;
@@ -7410,7 +8078,7 @@
   function openPause() {
     if (gameOver || outro === 'slowmo' || l6Transit) return;
     paused = true;
-    setOverlay(pauseOverlay, true);
+    refreshPauseMeta(); setOverlay(pauseOverlay, true);
     setOverlay(shopOverlay, false);
     setOverlay(packOverlay, false);
     // Asegurar que tienda/mochila sigan visibles en el menú de pausa
@@ -7457,19 +8125,36 @@
     renderPack();
     setOverlay(packOverlay, true);
   }
+  function refreshPauseMeta() {
+    const el = document.getElementById('pauseMeta');
+    if (!el) return;
+    const bits = [];
+    bits.push('Racha diaria: ' + (dailyWinStreak | 0));
+    bits.push('Victorias: ' + (victoryStreak | 0));
+    if (dailyBadge) bits.push('🎖 Desafío diario');
+    const rec = bestRecords[String(level().id)];
+    if (rec && rec.time != null) bits.push('Récord: ' + (rec.time | 0) + 's');
+    el.textContent = bits.join(' · ');
+  }
 
   function renderShop() {
     const shopMoney = document.getElementById('shopMoney');
     if (shopMoney) shopMoney.textContent = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
     const lvl = level().id;
-    shopList.innerHTML = SHOP.filter((it) => {
+    initDailyDeal();
+    const today = todayKey();
+    const chestDone = dailyChestBought === today;
+    let extra = `<div class="shop-item deal-banner"><div class="icon">🎁</div><div class="info"><div class="name">Cofre misterioso</div><div class="desc">1/día · premio al azar ($350)</div></div><div class="price">$350</div><button type="button" id="btnChest" ${chestDone || backpack.length >= PACK_MAX || score < 350 ? 'disabled' : ''}>${chestDone ? 'Ya abierto' : 'Abrir'}</button></div>`;
+    shopList.innerHTML = extra + SHOP.filter((it) => {
       if (it.minLevel != null && lvl < it.minLevel) return false;
       // ball skins: hide if active or already in backpack
       if (it.ballPower != null && (activeBallSkin === it.id || backpack.includes(it.id))) return false;
       return true;
     }).map((it) => {
+      const price = shopPrice(it);
+      const deal = it.id === dailyDealId;
       const full = backpack.length >= PACK_MAX;
-      const broke = score < it.price;
+      const broke = score < price;
       const disabled = full || broke;
       let why = '';
       if (full) why = 'Mochila llena';
@@ -7477,10 +8162,11 @@
       const iconHtml = it.img
         ? `<div class="icon"><img src="${it.img}" alt="" style="width:36px;height:36px;object-fit:contain;border-radius:50%"></div>`
         : `<div class="icon">${it.icon}</div>`;
-      const priceLabel = it.price >= 1000 ? ('$' + it.price.toLocaleString('en-US')) : ('$' + it.price);
-      return `<div class="shop-item">
+      const priceLabel = (deal ? '🔥 ' : '') + (price >= 1000 ? ('$' + price.toLocaleString('en-US')) : ('$' + price));
+      const name = deal ? (it.name + ' (−20%)') : it.name;
+      return `<div class="shop-item${deal ? ' daily-deal' : ''}">
         ${iconHtml}
-        <div class="info"><div class="name">${it.name}</div><div class="desc">${it.desc}</div></div>
+        <div class="info"><div class="name">${name}</div><div class="desc">${it.desc}</div></div>
         <div class="price">${priceLabel}</div>
         <button type="button" data-buy="${it.id}" ${disabled ? 'disabled' : ''}>${disabled ? why : 'Comprar'}</button>
       </div>`;
@@ -7488,6 +8174,8 @@
     shopList.querySelectorAll('[data-buy]').forEach((btn) => {
       btn.addEventListener('click', () => buyItem(btn.getAttribute('data-buy')));
     });
+    const chestBtn = document.getElementById('btnChest');
+    if (chestBtn) chestBtn.addEventListener('click', () => buyMysteryChest());
   }
 
   function renderPack() {
@@ -7495,7 +8183,7 @@
     if (packMoney) packMoney.textContent = '$' + (score >= 1000 ? score.toLocaleString('en-US') : String(score));
     packSlots.textContent = `${backpack.length} / ${PACK_MAX} espacios`;
     if (!backpack.length) {
-      packList.innerHTML = '<p class="sub">Vacía — compra algo en la tienda.</p>';
+      packList.innerHTML = '<p class="sub">Vacía — compra algo en la tienda.</p>' + renderCollectionHtml();
       return;
     }
     packList.innerHTML = backpack.map((id, idx) => {
@@ -7513,15 +8201,18 @@
     packList.querySelectorAll('[data-use]').forEach((btn) => {
       btn.addEventListener('click', () => useItem(+btn.getAttribute('data-use')));
     });
+    packList.insertAdjacentHTML('beforeend', renderCollectionHtml());
   }
 
   function buyItem(id) {
     const it = SHOP.find((s) => s.id === id);
     if (!it) return;
     if (backpack.length >= PACK_MAX) return;
-    if (score < it.price) return;
-    score -= it.price;
+    const price = shopPrice(it);
+    if (score < price) return;
+    score -= price;
     backpack.push(it.id);
+    if (it.ballPower != null) markSkinOwned(it.id);
     updateHud();
     renderShop();
   }
@@ -7545,6 +8236,7 @@
       bigPaddleUntil = performance.now() + 20000;
       hint.classList.add('show');
       hint.innerHTML = '<strong>📏 Paleta grande</strong><span>20 segundos</span>';
+      // power bar via updateAddictionHud
     } else if (id === 'bomb') {
       playerBombArmed = true;
       setBombButton(true);
@@ -7574,7 +8266,7 @@
       hint.classList.add('show');
       hint.innerHTML = '<strong>🔫 Cañones láser</strong><span>10s de duración · ráfaga 1s · CD 7s</span>';
     } else if (id === 'ballskin' || id === 'ballsilbadora') {
-      activeBallSkin = id;
+      activeBallSkin = id; markSkinOwned(id);
       if (ball && baseBallR) ball.r = baseBallR * ballRadiusMult();
       hint.classList.add('show');
       if (id === 'ballsilbadora') {

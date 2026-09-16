@@ -283,6 +283,73 @@
       from { filter: brightness(1); opacity: 0.85; }
       to { filter: brightness(1.35); opacity: 1; }
     }
+
+    #phaseBar {
+      display: none; position: absolute; left: 12px; right: 12px; bottom: 10px;
+      z-index: 5; pointer-events: none;
+    }
+    #phaseBar.show { display: block; }
+    #phaseBar .phase-label {
+      font-size: 11px; font-weight: 650; color: #ffd08a; margin-bottom: 3px;
+      text-shadow: 0 1px 3px rgba(0,0,0,.85);
+    }
+    #phaseBar .phase-track {
+      height: 6px; border-radius: 999px; background: rgba(0,0,0,.45);
+      border: 1px solid rgba(255,180,80,.35); overflow: hidden;
+    }
+    #phaseBar .phase-fill {
+      height: 100%; width: 100%; background: linear-gradient(90deg,#e85d04,#ffd06a);
+      border-radius: inherit; transition: width .15s linear;
+    }
+    #comboHud {
+      display: none; position: absolute; top: 52%; left: 50%; transform: translate(-50%,-50%);
+      z-index: 5; pointer-events: none; font-size: 20px; font-weight: 800;
+      color: #ffd24a; text-shadow: 0 2px 8px rgba(0,0,0,.8); letter-spacing: .04em;
+    }
+    #comboHud.show { display: block; }
+    #powerBars {
+      display: none; position: absolute; left: 10px; top: max(48px, env(safe-area-inset-top));
+      z-index: 5; pointer-events: none; width: min(160px, 42vw);
+    }
+    #powerBars.show { display: block; }
+    #powerBars .pwr { margin-bottom: 4px; }
+    #powerBars .pwr span {
+      font-size: 10px; font-weight: 650; color: #b8f5c2; text-shadow: 0 1px 2px #000;
+    }
+    #powerBars .pwr.laser span { color: #9ad8ff; }
+    #powerBars .pwr-track {
+      height: 5px; border-radius: 999px; background: rgba(0,0,0,.5);
+      border: 1px solid rgba(255,255,255,.2); overflow: hidden;
+    }
+    #powerBars .pwr-track > div {
+      height: 100%; background: linear-gradient(90deg,#3d8,#af8); width: 100%;
+    }
+    #powerBars .pwr.laser .pwr-track > div {
+      background: linear-gradient(90deg,#1e90ff,#5cf0ff);
+    }
+    #recordHud {
+      display: none; position: absolute; left: 10px;
+      top: max(10px, env(safe-area-inset-top));
+      z-index: 5; pointer-events: none; font-size: 11px; font-weight: 650;
+      color: #c8d6ff; text-shadow: 0 1px 3px rgba(0,0,0,.85);
+    }
+    #recordHud.show { display: block; }
+    #softFail {
+      display: none; position: absolute; inset: 0; z-index: 20;
+      background: rgba(0,0,0,.72); align-items: center; justify-content: center;
+      flex-direction: column; gap: 12px; padding: 24px;
+    }
+    #softFail.show { display: flex; }
+    #softFail h2 { font-size: 28px; font-weight: 800; color: #ff6b6b; }
+    #softFail .soft-btns { display: flex; flex-direction: column; gap: 10px; width: min(280px, 86vw); }
+    #softFail button { width: 100%; }
+    #softFail button.revivir { background: #2a9d8f; }
+    .shop-item.daily-deal { outline: 1px solid rgba(255,180,40,.55); background: rgba(255,140,0,.08); }
+    .collection { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.12); }
+    .collection h3 { font-size: 13px; margin-bottom: 6px; color: #ffc070; }
+    .col-row { font-size: 12px; opacity: .9; padding: 3px 0; }
+    .col-row.locked { opacity: .45; }
+    #pauseMeta { font-size: 12px; opacity: .8; margin: 6px 0 10px; line-height: 1.35; }
   </style>
 </head>
 <body>
@@ -306,19 +373,36 @@
         <div id="score"><span class="bills" aria-hidden="true">💵</span><span id="scoreVal">$0</span></div>
         <div id="lives" aria-label="Vidas"></div>
       </div>
+      <div id="recordHud" aria-hidden="true"></div>
+      <div id="powerBars" aria-hidden="true"></div>
+      <div id="comboHud" aria-hidden="true">COMBO</div>
+      <div id="phaseBar" aria-hidden="true">
+        <div class="phase-label">100% resto</div>
+        <div class="phase-track"><div class="phase-fill"></div></div>
+      </div>
+      <div id="softFail" aria-hidden="true">
+        <h2>Game over</h2>
+        <div class="soft-btns">
+          <button type="button" data-act="retry">Reintentar</button>
+          <button type="button" class="revivir" data-act="revive">Revivir ($500)</button>
+          <button type="button" class="secondary" data-act="menu">Menú</button>
+        </div>
+      </div>
       <button type="button" class="img-btn" id="btnBomb" aria-label="Bomba" aria-hidden="true">
         <img id="btnBombImg" src="btn-bomb.png" alt="Bomba" />
       </button>
       <div id="loading">Armando el campo…</div>
-      <div id="hint"><strong>Desliza la paleta</strong><span>Toca para lanzar la bola</span></div>
+      <div id="hint"><strong>Desliza la paleta en todas direcciones</strong><span>Toca para lanzar la bola</span></div>
       <canvas id="c"></canvas>
 
       <div id="pauseOverlay" class="overlay" aria-hidden="true">
         <div class="panel">
           <h2>Pausa</h2>
           <p class="sub">Partida en espera</p>
+          <p id="pauseMeta" class="sub"></p>
           <div class="menu-btns">
             <button type="button" class="nav-primary" id="btnResume">Continuar</button>
+            <button type="button" class="nav-secondary" id="btnDaily">Desafío diario</button>
             <div class="menu-btns-row">
               <button type="button" class="img-btn" id="btnShop" aria-label="Tienda">
                 <img id="btnShopImg" src="btn-shop.png" alt="" />
@@ -365,6 +449,6 @@
       </div>
     </div>
   </div>
-  <script src="game.js?v=72"></script>
+  <script src="game.js?v=73"></script>
 </body>
 </html>
