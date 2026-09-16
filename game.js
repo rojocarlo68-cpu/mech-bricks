@@ -188,9 +188,6 @@
   let coinFly = [];
   let scoreBumpT = 0;
   let levelStartMs = 0;
-  let reviveOfferPending = false;
-  let reviveUsedThisLife = false;
-  const REVIVE_COST = 500;
   let dailyWinStreak = 0;
   let victoryStreak = 0;
   let ownedSkins = { paddle: true };
@@ -459,8 +456,7 @@
   function noteLevelStart() {
     levelStartMs = performance.now();
     resetCombo();
-    reviveOfferPending = false;
-    reviveUsedThisLife = false;
+    paddleDeathAnim = null;
     hideSoftFail();
     updateAddictionHud();
   }
@@ -577,9 +573,6 @@
     softFailVisible = true;
     const el = document.getElementById('softFail');
     if (!el) return;
-    const canRevive = !reviveUsedThisLife && score >= REVIVE_COST;
-    el.querySelector('[data-act="revive"]').style.display = canRevive ? '' : 'none';
-    el.querySelector('[data-act="revive"]').textContent = 'Revivir ($' + REVIVE_COST + ')';
     el.classList.add('show');
     el.setAttribute('aria-hidden', 'false');
   }
@@ -589,24 +582,6 @@
     if (!el) return;
     el.classList.remove('show');
     el.setAttribute('aria-hidden', 'true');
-  }
-  function tryRevive() {
-    if (reviveUsedThisLife) return false;
-    if (score < REVIVE_COST) return false;
-    score -= REVIVE_COST;
-    reviveUsedThisLife = true;
-    reviveOfferPending = false;
-    gameOver = false;
-    lives = Math.max(1, lives);
-    launched = false;
-    deathGlitch = 0;
-    gameOverHintPending = false;
-    hideSoftFail();
-    stickBallToPaddle();
-    updateHud();
-    hint.classList.add('show');
-    hint.innerHTML = '<strong>¡Reviviste!</strong><span>Toca para lanzar</span>';
-    return true;
   }
   function renderCollectionHtml() {
     const ballIds = SHOP.filter((s) => s.ballPower != null).map((s) => s.id);
@@ -633,6 +608,12 @@
   let particles = [];
   let paddleImg = null;
   let paddleLaserImg = null;
+  /** Idle 3D frames: 1 bottom, 2 yaw-right, 3 above-right, 5 center, 6 from-below (skip 4/7/8). */
+  let paddle3dImgs = { 1: null, 2: null, 3: null, 5: null, 6: null };
+  /** Death explode frames 1..8 */
+  let paddleExplodeImgs = [null, null, null, null, null, null, null, null];
+  let paddleDeathAnim = null; // { frame, elapsed, x, y, w, h } | null
+  const PADDLE_DEATH_FRAME_MS = 60;
   let paddleTrail = []; // estela azul
   let laserCannonsActive = false;
   let laserPhase = null; // 'warmup' | 'fire' | 'cooldown'
@@ -678,8 +659,6 @@
   let baseBallR = 6;
   function ballSkinOn() { return activeBallSkin != null; }
   function ballRadiusMult() {
-    if (activeBallSkin === 'ballsilbadora') return 1.12;
-    if (activeBallSkin === 'ballskin') return 1.1;
     return 1;
   }
   function activeBallSkinImg() {
@@ -1048,10 +1027,20 @@
   function paddleYMax() {
     return H - 8 - (paddle ? paddle.h : 20);
   }
+  function isKingLevel7() {
+    return !!(level() && level().id === 7);
+  }
+  function kingPaddleY() {
+    return H - 28 - (paddle ? paddle.h : 20);
+  }
   function clampPaddle() {
     if (!paddle) return;
     paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
-    paddle.y = Math.max(paddleYMin(), Math.min(paddleYMax(), paddle.y));
+    if (isKingLevel7()) {
+      paddle.y = kingPaddleY();
+    } else {
+      paddle.y = Math.max(paddleYMin(), Math.min(paddleYMax(), paddle.y));
+    }
   }
   /**
    * Empuja la pala fuera de ladrillos vivos.
@@ -1061,6 +1050,12 @@
    */
   function resolvePaddleVsBricks() {
     if (!paddle || !cols || !rows || !cellScreen) return;
+    // L7 King: X-only paddle — skip brick resolve so it cannot jitter into the king
+    if (isKingLevel7()) {
+      paddle.y = kingPaddleY();
+      paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
+      return;
+    }
 
     function brickCollidable(br) {
       if (!br || !br.alive || br.falling || br.settled) return false;
@@ -1239,7 +1234,7 @@
     if (!paddle) return;
     if (!pointerDragging) return;
     if (pointerX != null) paddle.x = pointerX - grabOffsetX;
-    if (pointerY != null) paddle.y = pointerY - grabOffsetY;
+    if (!isKingLevel7() && pointerY != null) paddle.y = pointerY - grabOffsetY;
     clampPaddle();
     resolvePaddleVsBricks();
   }
@@ -1252,12 +1247,14 @@
     let dx = 0, dy = 0;
     if (keysHeld.ArrowLeft || keysHeld.a || keysHeld.A) dx -= 1;
     if (keysHeld.ArrowRight || keysHeld.d || keysHeld.D) dx += 1;
-    if (keysHeld.ArrowUp || keysHeld.w || keysHeld.W) dy -= 1;
-    if (keysHeld.ArrowDown || keysHeld.s || keysHeld.S) dy += 1;
+    if (!isKingLevel7()) {
+      if (keysHeld.ArrowUp || keysHeld.w || keysHeld.W) dy -= 1;
+      if (keysHeld.ArrowDown || keysHeld.s || keysHeld.S) dy += 1;
+    }
     if (!dx && !dy) return;
     // Si hay pointer activo, teclado suma encima
     paddle.x += dx * speed * dt;
-    paddle.y += dy * speed * dt;
+    if (!isKingLevel7()) paddle.y += dy * speed * dt;
     clampPaddle();
     resolvePaddleVsBricks();
   }
@@ -5652,12 +5649,39 @@
     addCrackBurst(ix, iy, n);
   }
 
+  function startPaddleDeathExplode() {
+    if (!paddle) {
+      paddleDeathAnim = null;
+      return;
+    }
+    paddleDeathAnim = {
+      frame: 0,
+      elapsed: 0,
+      x: paddle.x,
+      y: paddle.y,
+      w: paddle.w,
+      h: paddle.h,
+    };
+  }
+  function updatePaddleDeathAnim(dt) {
+    if (!paddleDeathAnim) return;
+    paddleDeathAnim.elapsed += dt * 1000;
+    while (paddleDeathAnim.elapsed >= PADDLE_DEATH_FRAME_MS && paddleDeathAnim.frame < 7) {
+      paddleDeathAnim.elapsed -= PADDLE_DEATH_FRAME_MS;
+      paddleDeathAnim.frame++;
+    }
+    // Hold last frame; do not clear — soft-fail overlay stays; restart clears via reset
+    if (paddleDeathAnim.frame >= 7 && paddleDeathAnim.elapsed > PADDLE_DEATH_FRAME_MS * 2) {
+      // keep last frame visible under overlay
+    }
+  }
   function triggerDeathFX() {
     if (deathGlitch > 0 || gameOverHintPending) return; // once
     syncCrackIntensity();
     crackIntensity = 1;
     hurtFlash = 0.35;
     bumpCam(8);
+    startPaddleDeathExplode();
     for (let i = 0; i < 14; i++) {
       addCrackBurst(Math.random() * W, Math.random() * H, 2 + (i % 3));
     }
@@ -5673,6 +5697,7 @@
   }
 
   function updateDamageFX(dt) {
+    updatePaddleDeathAnim(dt);
     if (hurtFlash > 0) hurtFlash = Math.max(0, hurtFlash - dt);
     if (deathGlitch > 0) {
       deathGlitch = Math.max(0, deathGlitch - dt);
@@ -5801,22 +5826,14 @@
       return;
     }
     resetCombo();
-    reviveUsedThisLife = false;
     lives = Math.max(0, lives - 1);
     triggerHurtFX(true);
     updateHud();
     if (checkGameOver()) return;
     launched = false;
     stickBallToPaddle();
-    // Oferta de revive barata una vez por pérdida si hay fondos
-    if (!reviveUsedThisLife && score >= REVIVE_COST) {
-      reviveOfferPending = true;
-      hint.classList.add('show');
-      hint.innerHTML = '<strong>Vida perdida</strong><span>Revivir $' + REVIVE_COST + ' o toca para lanzar</span>';
-    } else {
-      hint.classList.add('show');
-      hint.innerHTML = '<strong>Vida perdida</strong><span>Toca para lanzar de nuevo</span>';
-    }
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>Vida perdida</strong><span>Toca para lanzar de nuevo</span>';
   }
 
   function loseQuarterLife() {
@@ -6231,6 +6248,7 @@
             for (let i = 0; i < bricks.length; i++) {
               const br = bricks[i];
               if (!br.alive || br.falling || br.settled) continue;
+              if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
               if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
             }
             return false;
@@ -6248,15 +6266,21 @@
           const iy0 = Math.floor((ly - b.r - oy) / cellScreen) - 1;
           const ix1 = Math.floor((lx + b.r - ox) / cellScreen) + 1;
           const iy1 = Math.floor((ly + b.r - oy) / cellScreen) + 1;
-          for (let iy = iy0; iy <= iy1; iy++) {
-            if (iy < 0 || iy >= rows) continue;
-            for (let ix = ix0; ix <= ix1; ix++) {
-              if (ix < 0 || ix >= cols) continue;
-              const id = grid[iy * cols + ix];
-              if (id < 0) continue;
-              const br = bricks[id];
-              if (!br.alive || br.falling || br.settled) continue;
-              if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
+          const gridsToScan = (level().dualLayer && gridUpper && gridLower)
+            ? [gridUpper, gridLower]
+            : [grid];
+          for (const scanGrid of gridsToScan) {
+            for (let iy = iy0; iy <= iy1; iy++) {
+              if (iy < 0 || iy >= rows) continue;
+              for (let ix = ix0; ix <= ix1; ix++) {
+                if (ix < 0 || ix >= cols) continue;
+                const id = scanGrid[iy * cols + ix];
+                if (id < 0) continue;
+                const br = bricks[id];
+                if (!br.alive || br.falling || br.settled) continue;
+                if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+                if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
+              }
             }
           }
           return false;
@@ -7250,26 +7274,95 @@
     }
   }
 
+  /** Screen-cross 3D idle frame from paddle center. Returns { img, flip }. */
+  function pickPaddle3dFrame() {
+    if (!paddle) return { img: null, flip: false };
+    const cx = paddle.x + paddle.w / 2;
+    const cy = paddle.y + paddle.h / 2;
+    const nx = W > 0 ? cx / W : 0.5;
+    const ny = H > 0 ? cy / H : 0.8;
+    const left = nx < 0.28;
+    const right = nx > 0.72;
+    const top = ny < 0.38;
+    const bottom = ny > 0.62;
+    const midX = !left && !right;
+    let key = 1; // default: bottom / most of the time
+    let flip = false;
+    if (bottom && right) { key = 2; flip = false; }
+    else if (bottom && left) { key = 2; flip = true; }
+    else if (top && right) { key = 3; flip = false; }
+    else if (top && left) { key = 3; flip = true; }
+    else if (midX && top) { key = 6; flip = false; }
+    else if (midX && !bottom && !top) { key = 5; flip = false; }
+    else if (bottom || ny >= 0.5) { key = 1; flip = false; }
+    else { key = 6; flip = false; }
+    const img = paddle3dImgs[key] || paddle3dImgs[1] || paddleImg;
+    return { img, flip };
+  }
+
+  function drawPaddleSpriteInRect(img, x, y, w, h, flip) {
+    if (!img || !img.naturalWidth) return false;
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+    // cover into paddle box so the 3D paddle fills gameplay rect
+    const scale = Math.max(w / iw, h / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = x + (w - dw) / 2;
+    const dy = y + (h - dh) / 2;
+    ctx.save();
+    if (flip) {
+      ctx.translate(dx + dw, dy);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, 0, dw, dh);
+    } else {
+      ctx.drawImage(img, dx, dy, dw, dh);
+    }
+    ctx.restore();
+    return true;
+  }
+
   function drawPaddle() {
     drawPaddleTrail();
+    // Death explode overrides live paddle
+    if (paddleDeathAnim) {
+      const a = paddleDeathAnim;
+      const img = paddleExplodeImgs[Math.min(7, Math.max(0, a.frame | 0))];
+      if (img && img.naturalWidth) {
+        drawPaddleSpriteInRect(img, a.x, a.y, a.w, a.h, false);
+      }
+      return;
+    }
+    if (!paddle) return;
     const { x, y, w, h } = paddle;
-    const skin = activePaddleImg();
-    if (skin) {
+    // Laser cannons: keep laser art when active
+    if (laserCannonsActive && paddleLaserImg) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      const glow = laserCannonsActive
-        ? ['rgba(80,220,255,0.42)', 'rgba(40,160,255,0)']
-        : ['rgba(90,210,255,0.35)', 'rgba(40,140,255,0)'];
       const gg = ctx.createRadialGradient(x + w / 2, y + h * 0.55, 4, x + w / 2, y + h * 0.55, w * 0.55);
-      gg.addColorStop(0, glow[0]);
-      gg.addColorStop(1, glow[1]);
+      gg.addColorStop(0, 'rgba(80,220,255,0.42)');
+      gg.addColorStop(1, 'rgba(40,160,255,0)');
       ctx.fillStyle = gg;
       ctx.fillRect(x - 10, y - 6, w + 20, h + 14);
       ctx.restore();
-      ctx.drawImage(skin, x, y, w, h);
-    } else {
-      ctx.fillStyle = '#9ad8ff';
-      ctx.fillRect(x, y, w, h);
+      ctx.drawImage(paddleLaserImg, x, y, w, h);
+      return;
+    }
+    const { img, flip } = pickPaddle3dFrame();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const gg = ctx.createRadialGradient(x + w / 2, y + h * 0.55, 4, x + w / 2, y + h * 0.55, w * 0.55);
+    gg.addColorStop(0, 'rgba(90,210,255,0.35)');
+    gg.addColorStop(1, 'rgba(40,140,255,0)');
+    ctx.fillStyle = gg;
+    ctx.fillRect(x - 10, y - 6, w + 20, h + 14);
+    ctx.restore();
+    if (!drawPaddleSpriteInRect(img, x, y, w, h, flip)) {
+      if (paddleImg) ctx.drawImage(paddleImg, x, y, w, h);
+      else {
+        ctx.fillStyle = '#9ad8ff';
+        ctx.fillRect(x, y, w, h);
+      }
     }
   }
 
@@ -7337,7 +7430,7 @@
   function drawBall() {
     const skinImg = activeBallSkinImg();
     if (activeBallSkin && skinImg) {
-      const s = ball.r * 2.15;
+      const s = ball.r * 2;
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.45)';
       ctx.shadowBlur = 8;
@@ -8019,11 +8112,6 @@
       if (act === 'retry') {
         hideSoftFail();
         resetBtn.click();
-      } else if (act === 'revive') {
-        if (!tryRevive()) {
-          hint.classList.add('show');
-          hint.innerHTML = '<strong>Sin fondos</strong><span>Necesitas $' + REVIVE_COST + '</span>';
-        }
       } else if (act === 'menu') {
         hideSoftFail();
         paused = true;
@@ -8135,12 +8223,37 @@
       img.onerror = reject;
       img.src = src;
     });
+    const loadSoft = (src) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => { console.warn(src + ' missing'); resolve(null); };
+      img.src = src;
+    });
     return Promise.all([
       load('paddle.png'),
       load('paddle-laser.png'),
-    ]).then(([a, b]) => {
-      paddleImg = a;
-      paddleLaserImg = b;
+      loadSoft('paddle-3d-1-bottom.png'),
+      loadSoft('paddle-3d-2-yaw-right.png'),
+      loadSoft('paddle-3d-3-above-right.png'),
+      loadSoft('paddle-3d-5-center.png'),
+      loadSoft('paddle-3d-6-from-below.png'),
+      loadSoft('paddle-explode-1.png'),
+      loadSoft('paddle-explode-2.png'),
+      loadSoft('paddle-explode-3.png'),
+      loadSoft('paddle-explode-4.png'),
+      loadSoft('paddle-explode-5.png'),
+      loadSoft('paddle-explode-6.png'),
+      loadSoft('paddle-explode-7.png'),
+      loadSoft('paddle-explode-8.png'),
+    ]).then((imgs) => {
+      paddleImg = imgs[0];
+      paddleLaserImg = imgs[1];
+      paddle3dImgs[1] = imgs[2];
+      paddle3dImgs[2] = imgs[3];
+      paddle3dImgs[3] = imgs[4];
+      paddle3dImgs[5] = imgs[5];
+      paddle3dImgs[6] = imgs[6];
+      for (let i = 0; i < 8; i++) paddleExplodeImgs[i] = imgs[7 + i];
     });
   }
 
