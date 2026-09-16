@@ -1966,10 +1966,18 @@
     loading.textContent = `Cargando ${level().name}…`;
     hint.classList.remove('show');
     try {
-      await Promise.all([loadImage(), loadBg()]);
+      const assetsP = Promise.all([loadImage(), loadBg()]);
+      if (shouldPlayLevelIntro()) {
+        loading.classList.add('hide');
+        paused = true; // congelar partida mientras corre la cinemática
+        await playLevelIntro(level().id);
+        paused = false;
+      }
+      await assetsP;
       buildLevel();
       loading.classList.add('hide');
     } catch (err) {
+      paused = false;
       loading.textContent = 'No pude cargar el nivel.';
       console.error(err);
     }
@@ -8958,24 +8966,34 @@
   }
 
 
-  function shouldPlayCampaignIntro() {
+  /** Cinemáticas por nivel (frame packs → mp4). */
+  const LEVEL_INTROS = {
+    1: 'intro.mp4?v=3',
+    2: 'intro-level2.mp4?v=1',
+  };
+  function introsDisabled() {
     try {
       const q = new URLSearchParams(location.search);
-      if (q.get('skipintro') === '1' || q.get('nointro') === '1') return false;
-      // Solo al empezar campaña en nivel 1 (no deep-links a otros niveles)
-      if (levelIndex !== 0) return false;
-      return true;
-    } catch (_) { return levelIndex === 0; }
+      return q.get('skipintro') === '1' || q.get('nointro') === '1';
+    } catch (_) { return false; }
   }
-  function playCampaignIntro() {
+  function introSrcForLevelId(id) {
+    return LEVEL_INTROS[id] || null;
+  }
+  function shouldPlayLevelIntro() {
+    if (introsDisabled()) return false;
+    return !!introSrcForLevelId(level().id);
+  }
+  function playLevelIntro(levelId) {
+    const src = introSrcForLevelId(levelId != null ? levelId : level().id);
     return new Promise((resolve) => {
       const overlay = document.getElementById('introOverlay');
       const vid = document.getElementById('introVideo');
       const skip = document.getElementById('introSkip');
       const tap = document.getElementById('introTap');
-      if (!overlay || !vid) {
-        console.warn('[intro] overlay/video missing');
-        resolve();
+      if (!src || !overlay || !vid) {
+        if (!src) resolve();
+        else { console.warn('[intro] overlay/video missing'); resolve(); }
         return;
       }
       let done = false;
@@ -8996,7 +9014,6 @@
       const onSkip = (e) => { e && e.preventDefault(); e && e.stopPropagation(); finish(); };
       const onErr = () => {
         console.warn('[intro] video error', vid.error);
-        // No saltar en silencio: deja el tap visible
         if (tap) tap.classList.add('show');
       };
       const startPlay = () => {
@@ -9011,9 +9028,15 @@
         e && e.stopPropagation();
         startPlay();
       };
+      // Cargar fuente del nivel (cache-bust en el mapa)
+      if (vid.getAttribute('src') !== src) {
+        vid.setAttribute('src', src);
+        try { vid.load(); } catch (_) {}
+      }
       overlay.classList.add('show');
       overlay.setAttribute('aria-hidden', 'false');
       if (tap) {
+        tap.textContent = 'Toca para ver la cinemática';
         tap.classList.add('show');
         tap.addEventListener('pointerdown', onTapPlay);
       }
@@ -9021,19 +9044,20 @@
       vid.addEventListener('ended', finish);
       vid.addEventListener('error', onErr);
       try { vid.currentTime = 0; } catch (_) {}
-      // Intento de autoplay; si falla, queda "Toca para ver el intro"
       startPlay();
     });
   }
+  // alias legacy
+  function shouldPlayCampaignIntro() { return shouldPlayLevelIntro(); }
+  function playCampaignIntro() { return playLevelIntro(level().id); }
 
   (async function init() {
     try {
-      const wantIntro = shouldPlayCampaignIntro();
-      // Intro primero (assets del nivel cargan en paralelo)
+      const wantIntro = shouldPlayLevelIntro();
       const assetsP = Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts(), loadBallSkin()]);
       if (wantIntro) {
         loading.classList.add('hide');
-        await playCampaignIntro();
+        await playLevelIntro(level().id);
       }
       await assetsP;
       buildLevel();
