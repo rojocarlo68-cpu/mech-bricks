@@ -8971,8 +8971,8 @@
 
   /** Cinemáticas por nivel (frame packs → mp4). */
   const LEVEL_INTROS = {
-    1: 'intro.mp4?v=3',
-    2: 'intro-level2.mp4?v=1',
+    1: 'intro-level2.mp4?v=2',
+    2: 'intro.mp4?v=4',
   };
   function introsDisabled() {
     try {
