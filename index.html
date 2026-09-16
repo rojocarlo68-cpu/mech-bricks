@@ -320,6 +320,26 @@
     #introOverlay video {
       width: 100%; height: 100%; object-fit: contain; background: #000;
     }
+    #introSlidePanel {
+      display: none; position: absolute; inset: 0;
+      flex-direction: column; align-items: center; justify-content: center;
+      padding: 4vh 4vw 12vh; box-sizing: border-box; background: #000;
+      pointer-events: none;
+    }
+    #introSlidePanel.show { display: flex; }
+    #introSlide {
+      max-width: min(96vw, 1100px); max-height: min(72vh, 820px);
+      width: auto; height: auto; object-fit: contain;
+      border-radius: 6px; box-shadow: 0 8px 40px rgba(0,0,0,.65);
+      background: #111;
+    }
+    #introCaption {
+      margin: 18px 12px 0; max-width: min(92vw, 720px);
+      color: #ffe6b8; text-align: center;
+      font: 700 clamp(15px, 3.6vw, 22px)/1.35 system-ui, -apple-system, sans-serif;
+      text-shadow: 0 2px 10px #000, 0 0 1px #000;
+      letter-spacing: .02em;
+    }
     #introSkip {
       position: absolute; right: 14px; bottom: max(14px, env(safe-area-inset-bottom));
       z-index: 2; background: rgba(0,0,0,.55); color: #ffd08a;
@@ -423,7 +443,7 @@
     </div>
     <div id="laserCd" aria-hidden="true">
       <div class="laser-cd-inner">
-        <div class="laser-cd-label">Cañones · enfriamiento</div>
+        <div class="laser-cd-label">Cañones · láser</div>
         <div class="laser-cd-track"><div id="laserCdFill"></div></div>
       </div>
     </div>
@@ -506,9 +526,13 @@
   </div>
   <div id="introOverlay" aria-hidden="true">
     <video id="introVideo" playsinline webkit-playsinline preload="auto" src="intro.mp4?v=3"></video>
+    <div id="introSlidePanel" aria-hidden="true">
+      <img id="introSlide" alt="" />
+      <p id="introCaption"></p>
+    </div>
     <div id="introTap" class="show">Toca para ver el intro</div>
     <button type="button" id="introSkip">Saltar intro</button>
   </div>
-  <script src="game.js?v=86"></script>
+  <script src="game.js?v=87"></script>
 </body>
 </html>

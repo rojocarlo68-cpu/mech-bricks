@@ -126,7 +126,7 @@
 
   const SHOP = [
     { id: 'heart', name: 'Corazón de vida', desc: '+1 vida al usar', icon: '❤️', price: 2080 },
-    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · 10s de duración', icon: '🔫', price: 5120 },
+    { id: 'laser', name: 'Pistola láser', desc: 'Cañones duales · 7s · disparos azules', icon: '🔫', price: 5120 },
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 2100 },
     { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 2090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 2110 },
@@ -165,13 +165,11 @@
     try { localStorage.setItem(SCORE_KEY, String(score | 0)); } catch (_) {}
   }
   function restorePersistedScore() {
+    // Legacy helper — no auto-restore on boot (juego nuevo a $0).
+    // Solo ?money= / applyBootMoney fija el saldo al iniciar.
     if (bootMoney != null) { score = bootMoney | 0; persistScore(); return; }
-    try {
-      const n = parseInt(localStorage.getItem(SCORE_KEY) || '', 10);
-      if (Number.isFinite(n) && n >= 0) score = n;
-    } catch (_) {}
   }
-  restorePersistedScore();
+  // No llamar restorePersistedScore() al boot: score arranca en 0 salvo ?money=
   let pointerX = null;
   let pointerY = null;
   let grabOffsetX = 0;
@@ -637,16 +635,24 @@
   const PADDLE_DEATH_FRAME_MS = 60;
   let paddleTrail = []; // estela azul
   let laserCannonsActive = false;
-  let laserPhase = null; // 'warmup' | 'fire' | 'cooldown'
+  let laserPhase = null; // 'warmup' | 'fire'
   let laserAwaitUnpause = false;
   let laserPhaseT = 0;
-  let laserFireUntil = 0; // performance.now() deadline
-  const LASER_FIRE_S = 1.0;
-  const LASER_CD_S = 7.0;
-  const LASER_TOTAL_S = 10.0; // duración total activa
+  let laserFireUntil = 0; // performance.now() deadline (legacy)
+  const LASER_FIRE_S = 1.0; // unused for continuous fire; kept for save compat
+  const LASER_CD_S = 7.0; // unused in continuous mode
+  const LASER_TOTAL_S = 7.0; // duración total activa
+  const LASER_BOLT_INTERVAL = 0.15; // s entre disparos (alternando cañones)
+  const LASER_BOLT_SPEED = 920; // px/s hacia arriba
+  const LASER_BOLT_LIFE = 0.85; // s máx de vuelo
+  const LASER_BLAST_MAX = 10;
   let laserExpireAt = 0; // performance.now() deadline
   let laserCdEl = null;
   let laserCdFillEl = null;
+  let laserBolts = []; // {x,y,vx,vy,r,life}
+  let laserSpawnAcc = 0;
+  let laserSpawnSide = 0; // 0 izq / 1 der alternado
+  let laserMuzzleFlash = [0, 0]; // brief flash per cannon tip
   let bombImg = null;
   let bombArmedImg = null;
   let bombPlayerImg = null;
@@ -1375,14 +1381,20 @@
     laserCdEl.classList.add('show');
     if (laserPhase === 'fire') {
       laserCdEl.classList.add('firing');
-      if (laserCdFillEl) laserCdFillEl.style.width = '100%';
+      if (laserCdFillEl) {
+        if (laserExpireAt) {
+          const left = Math.max(0, Math.min(1, (laserExpireAt - performance.now()) / (LASER_TOTAL_S * 1000)));
+          laserCdFillEl.style.width = (left * 100).toFixed(1) + '%';
+        } else {
+          laserCdFillEl.style.width = '100%';
+        }
+      }
     } else if (laserPhase === 'warmup' || laserAwaitUnpause) {
       laserCdEl.classList.remove('firing');
       if (laserCdFillEl) laserCdFillEl.style.width = '0%';
     } else {
       laserCdEl.classList.remove('firing');
-      const t = Math.max(0, Math.min(1, laserPhaseT / LASER_CD_S));
-      if (laserCdFillEl) laserCdFillEl.style.width = (t * 100).toFixed(1) + '%';
+      if (laserCdFillEl) laserCdFillEl.style.width = '0%';
     }
   }
 
@@ -1393,6 +1405,10 @@
     laserFireUntil = 0;
     laserExpireAt = 0;
     laserAwaitUnpause = false;
+    laserBolts = [];
+    laserSpawnAcc = 0;
+    laserSpawnSide = 0;
+    laserMuzzleFlash = [0, 0];
     updateLaserCdUi();
   }
 
@@ -1401,7 +1417,7 @@
     laserAwaitUnpause = false;
     laserPhase = 'warmup';
     laserPhaseT = 1.0; // 1s después de quitar pausa
-    // 10s de duración total desde que empieza el calentamiento
+    // 7s de duración total desde que empieza el calentamiento
     if (!laserExpireAt) laserExpireAt = performance.now() + LASER_TOTAL_S * 1000;
     updateLaserCdUi();
   }
@@ -7463,23 +7479,48 @@
   }
 
   function drawLaserBeams() {
-    if (!laserCannonsActive || laserPhase !== 'fire' || !paddle) return;
-    const tipsY = paddle.y + paddle.h * 0.22;
-    const half = Math.max(brickPx * 1.0, 8);
-    const pulse = 0.75 + 0.25 * Math.sin(performance.now() * 0.028);
-    for (const x of cannonXs()) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createLinearGradient(x, 0, x, tipsY);
-      g.addColorStop(0, `rgba(180,255,255,${0.05 * pulse})`);
-      g.addColorStop(0.35, `rgba(80,220,255,${0.55 * pulse})`);
-      g.addColorStop(1, `rgba(40,160,255,${0.9 * pulse})`);
-      ctx.fillStyle = g;
-      ctx.fillRect(x - half * 1.6, 0, half * 3.2, tipsY);
-      ctx.fillStyle = `rgba(220,255,255,${0.85 * pulse})`;
-      ctx.fillRect(x - half * 0.35, 0, half * 0.7, tipsY);
-      ctx.restore();
+    if (!paddle) return;
+    // Muzzle flashes
+    if (laserCannonsActive && laserPhase === 'fire') {
+      const tipsY = paddle.y + paddle.h * 0.22;
+      const xs = cannonXs();
+      for (let i = 0; i < xs.length; i++) {
+        const flash = laserMuzzleFlash[i] || 0;
+        if (flash <= 0) continue;
+        const x = xs[i];
+        const a = Math.min(1, flash * 2.2);
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.beginPath();
+        ctx.arc(x, tipsY, 6 + flash * 10, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(120,220,255,${0.55 * a})`;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, tipsY, 2.5 + flash * 4, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(230,255,255,${0.9 * a})`;
+        ctx.fill();
+        ctx.restore();
+      }
     }
+    // Bolts
+    if (!laserBolts.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const b of laserBolts) {
+      const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r * 2.2);
+      g.addColorStop(0, 'rgba(230,255,255,0.95)');
+      g.addColorStop(0.45, 'rgba(80,200,255,0.75)');
+      g.addColorStop(1, 'rgba(40,140,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(b.x, b.y, b.r * 0.7, b.r * 1.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(200,240,255,0.9)';
+      ctx.beginPath();
+      ctx.ellipse(b.x, b.y, b.r * 0.28, b.r * 0.9, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   function updateBallAirTrail(dt) {
@@ -8620,47 +8661,154 @@
     }, 2000);
   }
 
-  function burnLaserColumnOnCurrent(x) {
-    const half = Math.max(brickPx * 1.0, 8);
-    const tryBurn = (br) => {
-      if (!br.alive || br.falling || br.settled) return;
-      if (br.layer === 'lower' && isLowerCoveredByUpper(br)) return;
-      if (br.y + br.h < 0 || br.y >= paddle.y) return;
-      const cx = br.x + br.w / 2;
-      if (Math.abs(cx - x) > half && (br.x > x + half || br.x + br.w < x - half)) return;
-      if (Math.abs(cx - x) > half) return;
-      spawnDust(cx, br.y + br.h / 2, 'rgb(120,220,255)', 4, { spread: 0.8, up: 1.2 });
-      destroyBrick(br, 1);
+  function laserBlastCandidatesOnCurrent(x, y, radius, out) {
+    const r2 = radius * radius;
+    const consider = (br) => {
+      if (!br || !br.alive || br.falling || br.settled) return;
+      if (br.layer === 'lower' && typeof isLowerCoveredByUpper === 'function' && isLowerCoveredByUpper(br)) return;
+      const cx = br.x + br.w * 0.5;
+      const cy = br.y + br.h * 0.5;
+      const dx = cx - x;
+      const dy = cy - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > r2) return;
+      out.push({ br, d2, cx, cy });
     };
     if (level().panels) {
-      for (let i = 0; i < bricks.length; i++) tryBurn(bricks[i]);
+      for (let i = 0; i < bricks.length; i++) consider(bricks[i]);
       return;
     }
     const ox = originX + structureDX;
-    const ix0 = Math.max(0, Math.floor((x - half - ox) / cellScreen) - 1);
-    const ix1 = Math.min(cols - 1, Math.floor((x + half - ox) / cellScreen) + 1);
+    const oy = originY + structureDY;
+    const cs = Math.max(1e-6, cellScreen || brickPx || 8);
+    const ix0 = Math.max(0, Math.floor((x - radius - ox) / cs) - 1);
+    const ix1 = Math.min(cols - 1, Math.floor((x + radius - ox) / cs) + 1);
+    const iy0 = Math.max(0, Math.floor((y - radius - oy) / cs) - 1);
+    const iy1 = Math.min(rows - 1, Math.floor((y + radius - oy) / cs) + 1);
     const gridsToScan = (level().dualLayer && gridUpper && gridLower)
       ? [gridUpper, gridLower]
       : [grid];
     const seen = new Set();
     for (const scanGrid of gridsToScan) {
-      for (let iy = 0; iy < rows; iy++) {
+      if (!scanGrid) continue;
+      for (let iy = iy0; iy <= iy1; iy++) {
         for (let ix = ix0; ix <= ix1; ix++) {
           const id = scanGrid[iy * cols + ix];
           if (id < 0 || seen.has(id)) continue;
           seen.add(id);
-          tryBurn(bricks[id]);
+          consider(bricks[id]);
         }
       }
     }
   }
 
-  function burnLaserColumn(x) {
-    if (structures.length) eachStructure(() => burnLaserColumnOnCurrent(x));
-    else burnLaserColumnOnCurrent(x);
+  function laserBlastAt(x, y) {
+    const radius = Math.max(brickPx * 3.2, 28);
+    const hits = [];
+    if (structures.length) {
+      eachStructure(() => laserBlastCandidatesOnCurrent(x, y, radius, hits));
+    } else {
+      laserBlastCandidatesOnCurrent(x, y, radius, hits);
+    }
+    hits.sort((a, b) => a.d2 - b.d2);
+    const n = Math.min(LASER_BLAST_MAX, hits.length);
+    for (let i = 0; i < n; i++) {
+      const h = hits[i];
+      spawnDust(h.cx, h.cy, 'rgb(100,210,255)', 5, { spread: 0.9, up: 1.4 });
+      destroyBrick(h.br, 1);
+    }
+    spawnDust(x, y, 'rgb(140,230,255)', 10, {
+      spread: 1.1, up: 1.6, long: false, big: false, hemisphere: true,
+    });
+  }
+
+  function spawnLaserBolt(sideIdx) {
+    if (!paddle) return;
+    const xs = cannonXs();
+    const x = xs[sideIdx % xs.length];
+    const y = paddle.y + paddle.h * 0.18;
+    laserBolts.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 40,
+      vy: -LASER_BOLT_SPEED,
+      r: Math.max(4.5, brickPx * 0.35),
+      life: LASER_BOLT_LIFE,
+    });
+    laserMuzzleFlash[sideIdx % 2] = 1;
+    if (laserBolts.length > 40) laserBolts.splice(0, laserBolts.length - 40);
+  }
+
+  function boltHitsBrickOnCurrent(bolt) {
+    const r = bolt.r;
+    const hitTest = (br) => {
+      if (!br.alive || br.falling || br.settled) return false;
+      if (br.layer === 'lower' && typeof isLowerCoveredByUpper === 'function' && isLowerCoveredByUpper(br)) return false;
+      if (bolt.x + r < br.x || bolt.x - r > br.x + br.w) return false;
+      if (bolt.y + r < br.y || bolt.y - r > br.y + br.h) return false;
+      return true;
+    };
+    if (level().panels) {
+      for (let i = 0; i < bricks.length; i++) {
+        if (hitTest(bricks[i])) return true;
+      }
+      return false;
+    }
+    const ox = originX + structureDX;
+    const oy = originY + structureDY;
+    const cs = Math.max(1e-6, cellScreen || brickPx || 8);
+    const ix0 = Math.max(0, Math.floor((bolt.x - r - ox) / cs) - 1);
+    const ix1 = Math.min(cols - 1, Math.floor((bolt.x + r - ox) / cs) + 1);
+    const iy0 = Math.max(0, Math.floor((bolt.y - r - oy) / cs) - 1);
+    const iy1 = Math.min(rows - 1, Math.floor((bolt.y + r - oy) / cs) + 1);
+    const gridsToScan = (level().dualLayer && gridUpper && gridLower)
+      ? [gridUpper, gridLower]
+      : [grid];
+    const seen = new Set();
+    for (const scanGrid of gridsToScan) {
+      if (!scanGrid) continue;
+      for (let iy = iy0; iy <= iy1; iy++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const id = scanGrid[iy * cols + ix];
+          if (id < 0 || seen.has(id)) continue;
+          seen.add(id);
+          if (hitTest(bricks[id])) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function boltHitsAnyBrick(bolt) {
+    let hit = false;
+    if (structures.length) {
+      eachStructure(() => { if (!hit && boltHitsBrickOnCurrent(bolt)) hit = true; });
+    } else {
+      hit = boltHitsBrickOnCurrent(bolt);
+    }
+    return hit;
+  }
+
+  function updateLaserBolts(dt) {
+    for (let i = laserMuzzleFlash.length - 1; i >= 0; i--) {
+      laserMuzzleFlash[i] = Math.max(0, (laserMuzzleFlash[i] || 0) - dt * 6);
+    }
+    for (let i = laserBolts.length - 1; i >= 0; i--) {
+      const b = laserBolts[i];
+      b.life -= dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      let explode = false;
+      if (b.life <= 0 || b.y < -20) explode = true;
+      else if (boltHitsAnyBrick(b)) explode = true;
+      if (explode) {
+        laserBlastAt(b.x, b.y);
+        laserBolts.splice(i, 1);
+      }
+    }
   }
 
   function updateLaserCannons(dt) {
+    updateLaserBolts(dt);
     if (!laserCannonsActive || !paddle) return;
     if (gameOver || won) {
       clearLaserCannons();
@@ -8669,7 +8817,7 @@
     if (laserExpireAt && performance.now() >= laserExpireAt) {
       clearLaserCannons();
       hint.classList.add('show');
-      hint.innerHTML = '<strong>🔫 Láser agotado</strong><span>Duración de 10s terminada</span>';
+      hint.innerHTML = '<strong>🔫 Láser agotado</strong><span>Duración de 7s terminada</span>';
       clearTimeout(window.__hintHide);
       window.__hintHide = setTimeout(() => { if (!gameOver) hint.classList.remove('show'); }, 1800);
       return;
@@ -8682,45 +8830,20 @@
       laserPhaseT -= dt;
       if (laserPhaseT <= 0) {
         laserPhase = 'fire';
-        laserFireUntil = performance.now() + LASER_FIRE_S * 1000; // 1.0s exacto
-        laserPhaseT = LASER_FIRE_S;
+        laserPhaseT = 0;
+        laserSpawnAcc = 0;
         for (const x of cannonXs()) {
-          spawnDust(x, paddle.y - 20, 'rgb(120,220,255)', 12, {
-            spread: 1.0, up: 3.2, long: true, big: true, hemisphere: true,
+          spawnDust(x, paddle.y - 20, 'rgb(120,220,255)', 10, {
+            spread: 0.9, up: 2.4, long: true, big: false, hemisphere: true,
           });
         }
       }
     } else if (laserPhase === 'fire') {
-      // Apagar al cumplir 1s de reloj (no se alarga con lag)
-      if (performance.now() >= laserFireUntil) {
-        laserPhase = 'cooldown';
-        laserPhaseT = LASER_CD_S;
-        updateLaserCdUi();
-        return;
-      }
-      laserPhaseT = Math.max(0, (laserFireUntil - performance.now()) / 1000);
-      if (!updateLaserCannons._acc) updateLaserCannons._acc = 0;
-      updateLaserCannons._acc += dt;
-      if (updateLaserCannons._acc >= 0.08) {
-        updateLaserCannons._acc = 0;
-        for (const x of cannonXs()) burnLaserColumn(x);
-      }
-    } else if (laserPhase === 'cooldown') {
-      laserPhaseT -= dt;
-      if (Math.random() < Math.min(1, dt * 8)) {
-        for (const x of cannonXs()) {
-          spawnCannonSmoke(x, paddle.y + paddle.h * 0.18);
-        }
-      }
-      if (laserPhaseT <= 0) {
-        laserPhase = 'fire';
-        laserFireUntil = performance.now() + LASER_FIRE_S * 1000;
-        laserPhaseT = LASER_FIRE_S;
-        for (const x of cannonXs()) {
-          spawnDust(x, paddle.y - 20, 'rgb(120,220,255)', 12, {
-            spread: 1.0, up: 3.2, long: true, big: true, hemisphere: true,
-          });
-        }
+      laserSpawnAcc += dt;
+      while (laserSpawnAcc >= LASER_BOLT_INTERVAL) {
+        laserSpawnAcc -= LASER_BOLT_INTERVAL;
+        spawnLaserBolt(laserSpawnSide);
+        laserSpawnSide = 1 - laserSpawnSide;
       }
     }
     updateLaserCdUi();
@@ -8969,10 +9092,11 @@
   }
 
 
-  /** Cinemáticas por nivel (frame packs → mp4). */
+  /** Cinemáticas por nivel: video string o { type:'slides', manifest }. */
   const LEVEL_INTROS = {
-    1: 'intro-level2.mp4?v=2',
-    2: 'intro.mp4?v=4',
+    1: 'intro-level2.mp4?v=3',
+    2: { type: 'slides', manifest: 'intro-l2/slides.json' },
+    3: 'intro-level3.mp4?v=1',
   };
   function introsDisabled() {
     try {
@@ -8983,15 +9107,106 @@
   function introSrcForLevelId(id) {
     return LEVEL_INTROS[id] || null;
   }
+  function introIsSlides(entry) {
+    return !!(entry && typeof entry === 'object' && entry.type === 'slides');
+  }
   function shouldPlayLevelIntro() {
     if (introsDisabled()) return false;
     return !!introSrcForLevelId(level().id);
   }
-  function playLevelIntro(levelId) {
-    const src = introSrcForLevelId(levelId != null ? levelId : level().id);
+  function preloadIntroImages(srcs) {
+    return Promise.all(srcs.map((src) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    })));
+  }
+  function playLevelIntroSlides(manifestUrl) {
+    return new Promise(async (resolve) => {
+      const overlay = document.getElementById('introOverlay');
+      const vid = document.getElementById('introVideo');
+      const panel = document.getElementById('introSlidePanel');
+      const slideImg = document.getElementById('introSlide');
+      const caption = document.getElementById('introCaption');
+      const skip = document.getElementById('introSkip');
+      const tap = document.getElementById('introTap');
+      if (!overlay || !panel || !slideImg) {
+        console.warn('[intro] slides overlay missing');
+        resolve();
+        return;
+      }
+      let slides = [];
+      try {
+        const res = await fetch(manifestUrl + (manifestUrl.includes('?') ? '&' : '?') + 'v=1');
+        const data = await res.json();
+        slides = (data && data.slides) || [];
+      } catch (err) {
+        console.warn('[intro] slides manifest error', err);
+        resolve();
+        return;
+      }
+      if (!slides.length) { resolve(); return; }
+      await preloadIntroImages(slides.map((s) => s.src));
+      let done = false;
+      let idx = 0;
+      let timer = null;
+      const hideTap = () => { if (tap) tap.classList.remove('show'); };
+      const setMode = () => {
+        if (vid) {
+          try { vid.pause(); } catch (_) {}
+          vid.style.display = 'none';
+        }
+        panel.classList.add('show');
+        panel.setAttribute('aria-hidden', 'false');
+      };
+      const finish = () => {
+        if (done) return;
+        done = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+        hideTap();
+        panel.classList.remove('show');
+        panel.setAttribute('aria-hidden', 'true');
+        if (vid) vid.style.display = '';
+        overlay.classList.remove('show');
+        overlay.setAttribute('aria-hidden', 'true');
+        if (skip) skip.removeEventListener('click', onSkip);
+        overlay.removeEventListener('pointerdown', onAdvance);
+        resolve();
+      };
+      const onSkip = (e) => { e && e.preventDefault(); e && e.stopPropagation(); finish(); };
+      const showSlide = (i) => {
+        if (done) return;
+        if (i >= slides.length) { finish(); return; }
+        idx = i;
+        const s = slides[i];
+        slideImg.src = s.src;
+        if (caption) caption.textContent = s.text || '';
+        if (timer) clearTimeout(timer);
+        const hold = (s.holdMs != null && s.holdMs > 0) ? s.holdMs : 4500;
+        timer = setTimeout(() => showSlide(idx + 1), hold);
+      };
+      const onAdvance = (e) => {
+        if (e && e.target && (e.target.id === 'introSkip' || (skip && skip.contains(e.target)))) return;
+        e && e.preventDefault();
+        e && e.stopPropagation();
+        hideTap();
+        showSlide(idx + 1);
+      };
+      setMode();
+      overlay.classList.add('show');
+      overlay.setAttribute('aria-hidden', 'false');
+      hideTap();
+      if (skip) skip.addEventListener('click', onSkip);
+      overlay.addEventListener('pointerdown', onAdvance);
+      showSlide(0);
+    });
+  }
+  function playLevelIntroVideo(src) {
     return new Promise((resolve) => {
       const overlay = document.getElementById('introOverlay');
       const vid = document.getElementById('introVideo');
+      const panel = document.getElementById('introSlidePanel');
       const skip = document.getElementById('introSkip');
       const tap = document.getElementById('introTap');
       if (!src || !overlay || !vid) {
@@ -8999,6 +9214,11 @@
         else { console.warn('[intro] overlay/video missing'); resolve(); }
         return;
       }
+      if (panel) {
+        panel.classList.remove('show');
+        panel.setAttribute('aria-hidden', 'true');
+      }
+      vid.style.display = '';
       let done = false;
       const hideTap = () => { if (tap) tap.classList.remove('show'); };
       const finish = () => {
@@ -9031,7 +9251,6 @@
         e && e.stopPropagation();
         startPlay();
       };
-      // Cargar fuente del nivel (cache-bust en el mapa)
       if (vid.getAttribute('src') !== src) {
         vid.setAttribute('src', src);
         try { vid.load(); } catch (_) {}
@@ -9049,6 +9268,12 @@
       try { vid.currentTime = 0; } catch (_) {}
       startPlay();
     });
+  }
+  function playLevelIntro(levelId) {
+    const entry = introSrcForLevelId(levelId != null ? levelId : level().id);
+    if (!entry) return Promise.resolve();
+    if (introIsSlides(entry)) return playLevelIntroSlides(entry.manifest);
+    return playLevelIntroVideo(entry);
   }
   // alias legacy
   function shouldPlayCampaignIntro() { return shouldPlayLevelIntro(); }
