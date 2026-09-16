@@ -561,10 +561,12 @@
     hint.classList.add('show');
     hint.innerHTML = '<strong>Desafío diario</strong><span>' + dailyMutators.label + '</span>';
   }
+  /** Extra global shrink so all levels (and daily mutators) stack on top. */
+  const GLOBAL_PADDLE_SCALE = 0.7;
   function effectivePaddleScale() {
     let s = levelPaddleScale();
     if (dailyMutators) s *= dailyMutators.paddleScale;
-    return s;
+    return s * GLOBAL_PADDLE_SCALE;
   }
   function effectiveBallSpeedMult() {
     let m = levelBallSpeedMult();
@@ -1051,26 +1053,97 @@
     paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
     paddle.y = Math.max(paddleYMin(), Math.min(paddleYMax(), paddle.y));
   }
-  /** Empuja la pala fuera de ladrillos vivos (eje de menor solape). */
+  /**
+   * Empuja la pala fuera de ladrillos vivos.
+   * One-axis resolve, few iterations, prefer downward/outward.
+   * Dual-layer: collide upper first; skip covered lower; hard floor under mech;
+   * eject to safe band if still nested after push attempts.
+   */
   function resolvePaddleVsBricks() {
     if (!paddle || !cols || !rows || !cellScreen) return;
-    const padL = paddle.x, padT = paddle.y;
-    const padR = paddle.x + paddle.w, padB = paddle.y + paddle.h;
-    const ox = originX + (structureDX || 0);
-    const oy = originY + (structureDY || 0);
-    const cs = cellScreen;
-    const ix0 = Math.max(0, Math.floor((padL - ox) / cs) - 1);
-    const iy0 = Math.max(0, Math.floor((padT - oy) / cs) - 1);
-    const ix1 = Math.min(cols - 1, Math.ceil((padR - ox) / cs) + 1);
-    const iy1 = Math.min(rows - 1, Math.ceil((padB - oy) / cs) + 1);
 
-    function pushOut(br) {
-      if (!br || !br.alive || br.falling || br.settled) return;
-      const bl = br.x, bt = br.y, brR = br.x + br.w, bb = br.y + br.h;
-      if (padR <= bl || padL >= brR || padB <= bt || padT >= bb) return;
-      const overlapX = Math.min(padR, brR) - Math.max(padL, bl);
-      const overlapY = Math.min(padB, bb) - Math.max(padT, bt);
-      if (overlapX <= 0 || overlapY <= 0) return;
+    function brickCollidable(br) {
+      if (!br || !br.alive || br.falling || br.settled) return false;
+      if (level().dualLayer && br.layer === 'lower' && typeof isLowerCoveredByUpper === 'function' && isLowerCoveredByUpper(br)) {
+        return false;
+      }
+      return true;
+    }
+
+    function collectOverlaps(out) {
+      out.length = 0;
+      const padL = paddle.x, padT = paddle.y;
+      const padR = paddle.x + paddle.w, padB = paddle.y + paddle.h;
+
+      function consider(br) {
+        if (!brickCollidable(br)) return;
+        const bl = br.x, bt = br.y, brR = br.x + br.w, bb = br.y + br.h;
+        if (padR <= bl || padL >= brR || padB <= bt || padT >= bb) return;
+        const overlapX = Math.min(padR, brR) - Math.max(padL, bl);
+        const overlapY = Math.min(padB, bb) - Math.max(padT, bt);
+        if (overlapX <= 0 || overlapY <= 0) return;
+        out.push({ br, bl, bt, brR, bb, overlapX, overlapY, area: overlapX * overlapY });
+      }
+
+      function scanGrid(g) {
+        if (!g) return;
+        const ox = originX + (structureDX || 0);
+        const oy = originY + (structureDY || 0);
+        const cs = cellScreen;
+        const ix0 = Math.max(0, Math.floor((padL - ox) / cs) - 1);
+        const iy0 = Math.max(0, Math.floor((padT - oy) / cs) - 1);
+        const ix1 = Math.min(cols - 1, Math.ceil((padR - ox) / cs) + 1);
+        const iy1 = Math.min(rows - 1, Math.ceil((padB - oy) / cs) + 1);
+        for (let iy = iy0; iy <= iy1; iy++) {
+          for (let ix = ix0; ix <= ix1; ix++) {
+            const id = g[iy * cols + ix];
+            if (id < 0) continue;
+            consider(bricks[id]);
+          }
+        }
+      }
+
+      if (level().dualLayer) {
+        // Prefer upper; covered lower skipped in brickCollidable
+        scanGrid(gridUpper);
+        scanGrid(gridLower);
+      } else if (structures && structures.length) {
+        for (const S of structures) {
+          if (!S || !S.grid || !S.bricks) continue;
+          const sox = (S.originX != null ? S.originX : originX) + (S.structureDX || 0);
+          const soy = (S.originY != null ? S.originY : originY) + (S.structureDY || 0);
+          const scs = S.cellScreen || cellScreen;
+          const scols = S.cols || cols;
+          const srows = S.rows || rows;
+          const six0 = Math.max(0, Math.floor((paddle.x - sox) / scs) - 1);
+          const siy0 = Math.max(0, Math.floor((paddle.y - soy) / scs) - 1);
+          const six1 = Math.min(scols - 1, Math.ceil((paddle.x + paddle.w - sox) / scs) + 1);
+          const siy1 = Math.min(srows - 1, Math.ceil((paddle.y + paddle.h - soy) / scs) + 1);
+          for (let iy = siy0; iy <= siy1; iy++) {
+            for (let ix = six0; ix <= six1; ix++) {
+              const id = S.grid[iy * scols + ix];
+              if (id < 0) continue;
+              const br = S.bricks[id];
+              if (!br || !br.alive || br.falling || br.settled) continue;
+              const bl = br.x, bt = br.y, brR = br.x + br.w, bb = br.y + br.h;
+              if (paddle.x + paddle.w <= bl || paddle.x >= brR || paddle.y + paddle.h <= bt || paddle.y >= bb) continue;
+              const overlapX = Math.min(paddle.x + paddle.w, brR) - Math.max(paddle.x, bl);
+              const overlapY = Math.min(paddle.y + paddle.h, bb) - Math.max(paddle.y, bt);
+              if (overlapX <= 0 || overlapY <= 0) continue;
+              out.push({ br, bl, bt, brR, bb, overlapX, overlapY, area: overlapX * overlapY });
+            }
+          }
+        }
+      } else {
+        scanGrid(grid);
+      }
+    }
+
+    function pushOneAxis(hit) {
+      const padL = paddle.x, padT = paddle.y;
+      const padR = paddle.x + paddle.w, padB = paddle.y + paddle.h;
+      const { bl, bt, brR, bb, overlapX, overlapY } = hit;
+      // Prefer the shallow axis; on ties / vertical, prefer downward (out of mech nest)
       if (overlapX < overlapY) {
         const mid = (padL + padR) * 0.5;
         const bmid = (bl + brR) * 0.5;
@@ -1079,53 +1152,88 @@
       } else {
         const mid = (padT + padB) * 0.5;
         const bmid = (bt + bb) * 0.5;
-        if (mid < bmid) paddle.y -= overlapY;
-        else paddle.y += overlapY;
-      }
-    }
-
-    function scanGrid(g) {
-      if (!g) return;
-      for (let iy = iy0; iy <= iy1; iy++) {
-        for (let ix = ix0; ix <= ix1; ix++) {
-          const id = g[iy * cols + ix];
-          if (id < 0) continue;
-          const br = bricks[id];
-          if (br) pushOut(br);
+        // Prefer push down/outward unless paddle is clearly above the brick
+        if (mid >= bmid || padT + (padB - padT) * 0.35 >= bmid) {
+          paddle.y += overlapY;
+        } else {
+          // Only push up if there is clear open space above; else eject downward
+          const roomAbove = padT - 8;
+          if (roomAbove > overlapY + 12) paddle.y -= overlapY;
+          else paddle.y += overlapY;
         }
       }
     }
 
+    function mechLiveBounds() {
+      let minX = Infinity, maxX = -Infinity, maxB = -Infinity, n = 0;
+      const list = bricks || [];
+      for (let i = 0; i < list.length; i++) {
+        const br = list[i];
+        if (!brickCollidable(br)) continue;
+        minX = Math.min(minX, br.x);
+        maxX = Math.max(maxX, br.x + br.w);
+        maxB = Math.max(maxB, br.y + br.h);
+        n++;
+      }
+      if (!n) return null;
+      return { minX, maxX, floorY: maxB + 6 };
+    }
+
+    function ejectBelowMech() {
+      const b = mechLiveBounds();
+      if (!b) {
+        paddle.y = Math.min(paddleYMax(), Math.max(paddle.y, H * 0.72));
+        clampPaddle();
+        return;
+      }
+      // Safe band under structure (prefer bottom play band); keep X unless still nested after
+      paddle.y = Math.max(b.floorY, Math.min(paddleYMax(), Math.max(paddle.y, H * 0.72)));
+      clampPaddle();
+    }
+
+    // Dual-layer: hard floor under lowest live brick while X overlaps mech
     if (level().dualLayer) {
-      scanGrid(gridLower);
-      scanGrid(gridUpper);
-    } else if (structures && structures.length) {
-      for (const S of structures) {
-        if (!S || !S.grid || !S.bricks) continue;
-        const sox = (S.originX != null ? S.originX : originX) + (S.structureDX || 0);
-        const soy = (S.originY != null ? S.originY : originY) + (S.structureDY || 0);
-        const scs = S.cellScreen || cellScreen;
-        const scols = S.cols || cols;
-        const srows = S.rows || rows;
-        const six0 = Math.max(0, Math.floor((paddle.x - sox) / scs) - 1);
-        const siy0 = Math.max(0, Math.floor((paddle.y - soy) / scs) - 1);
-        const six1 = Math.min(scols - 1, Math.ceil((paddle.x + paddle.w - sox) / scs) + 1);
-        const siy1 = Math.min(srows - 1, Math.ceil((paddle.y + paddle.h - soy) / scs) + 1);
-        for (let iy = siy0; iy <= siy1; iy++) {
-          for (let ix = six0; ix <= six1; ix++) {
-            const id = S.grid[iy * scols + ix];
-            if (id < 0) continue;
-            const br = S.bricks[id];
-            if (br) pushOut(br);
-          }
+      const b = mechLiveBounds();
+      if (b) {
+        const overlapsX = paddle.x < b.maxX + 4 && paddle.x + paddle.w > b.minX - 4;
+        if (overlapsX && paddle.y < b.floorY) {
+          paddle.y = b.floorY;
+          clampPaddle();
         }
+      }
+    }
+
+    const hits = [];
+    const maxIter = 3;
+    for (let iter = 0; iter < maxIter; iter++) {
+      collectOverlaps(hits);
+      if (!hits.length) break;
+      // Resolve worst penetration first (upper preferred via earlier collect order + area)
+      hits.sort((a, b) => {
+        const la = a.br.layer === 'upper' ? 0 : 1;
+        const lb = b.br.layer === 'upper' ? 0 : 1;
+        if (la !== lb) return la - lb;
+        return b.area - a.area;
+      });
+      pushOneAxis(hits[0]);
+      clampPaddle();
+    }
+
+    // Still nested? eject to safe zone (prevents oscillation in dense King)
+    collectOverlaps(hits);
+    if (hits.length) {
+      ejectBelowMech();
+      // one final pass after eject
+      collectOverlaps(hits);
+      if (hits.length) {
+        pushOneAxis(hits[0]);
+        clampPaddle();
       }
     } else {
-      scanGrid(grid);
+      clampPaddle();
     }
-    // Reclamp after push (never leave canvas)
-    clampPaddle();
   }
+
   /** Drag relativo + teclado; aplica X e Y; nunca fuerza Y al suelo. */
   function applyPaddleFromPointer() {
     if (!paddle) return;
@@ -6909,6 +7017,10 @@
     updateBg(dt);
     updateL6RookFormation(dt);
     updateDodgeAI(dt);
+    // Structure may have slid under the paddle (dodge/fly/jump) — re-resolve once
+    if (paddle && (level().dodge || level().fly || level().jump || level().dualLayer)) {
+      resolvePaddleVsBricks();
+    }
 
     // Cámara lenta al derrumbe final
     let simDt = dt;
