@@ -173,6 +173,7 @@
   }
   restorePersistedScore();
   let pointerX = null;
+  let pointerY = null;
   let lastTs = 0;
   let particles = [];
   let paddleImg = null;
@@ -584,6 +585,38 @@
     return Math.max(26, Math.min(h, Math.max(52, w * 0.48)));
   }
 
+  /** Banda vertical libre: ~28% altura hasta casi el suelo */
+  function paddleYMin() {
+    return Math.max(8, H * 0.28);
+  }
+  function paddleYMax() {
+    return H - 8 - (paddle ? paddle.h : 20);
+  }
+  function clampPaddle() {
+    if (!paddle) return;
+    paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
+    paddle.y = Math.max(paddleYMin(), Math.min(paddleYMax(), paddle.y));
+  }
+  /** Sigue el puntero en X e Y (centro de la pala). */
+  function trackPaddlePointer() {
+    if (!paddle) return;
+    if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
+    if (pointerY != null) paddle.y = pointerY - paddle.h / 2;
+    clampPaddle();
+  }
+  /** Al cambiar ancho/alto, conserva el centro. */
+  function resizePaddleKeepCenter(newW, newH) {
+    if (!paddle) return;
+    const cx = paddle.x + paddle.w / 2;
+    const cy = paddle.y + paddle.h / 2;
+    paddle.w = newW;
+    paddle.h = newH;
+    paddle.x = cx - paddle.w / 2;
+    paddle.y = cy - paddle.h / 2;
+    clampPaddle();
+  }
+
+
   function cannonXs() {
     return [
       paddle.x + paddle.w * 0.12,
@@ -653,10 +686,7 @@
     laserExpireAt = 0; // se arma en beginLaserWarmup
     // refrescar alto de paleta al cambiar de skin
     if (paddle) {
-      const cx = paddle.x + paddle.w / 2;
-      paddle.h = paddleHeightForWidth(paddle.w);
-      paddle.y = H - 28 - paddle.h;
-      paddle.x = Math.max(6, Math.min(W - paddle.w - 6, cx - paddle.w / 2));
+      resizePaddleKeepCenter(paddle.w, paddleHeightForWidth(paddle.w));
     }
     if (ball) {
       if (keepLaunched) {
@@ -3030,12 +3060,9 @@
   function applyL8ArmorFeel() {
     // Paddle -2%, bola +2% solo en resto de armadura
     if (!paddle) return;
-    const cx = paddle.x + paddle.w * 0.5;
     basePaddleW = Math.min(168, W * 0.42) * levelPaddleScale();
-    paddle.w = (bigPaddleUntil && performance.now() < bigPaddleUntil) ? basePaddleW * 1.35 : basePaddleW;
-    paddle.h = paddleHeightForWidth(paddle.w);
-    paddle.y = H - 28 - paddle.h;
-    paddle.x = Math.max(6, Math.min(W - paddle.w - 6, cx - paddle.w / 2));
+    const nw = (bigPaddleUntil && performance.now() < bigPaddleUntil) ? basePaddleW * 1.35 : basePaddleW;
+    resizePaddleKeepCenter(nw, paddleHeightForWidth(nw));
     if (ball) {
       const want = Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * levelBallSpeedMult();
       const sp = Math.hypot(ball.vx, ball.vy);
@@ -6184,10 +6211,7 @@
       updateL8Debris(dt);
       updatePlayerBomb(dt);
       // paddle still tracks
-      if (pointerX != null && paddle) {
-        paddle.x = pointerX - paddle.w / 2;
-        paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
-      }
+      trackPaddlePointer();
       if (ball && paddle) stickBallToPaddle();
       return;
     }
@@ -6218,10 +6242,7 @@
     if (level().queenBoss && l8Fade) {
       updateL8Fade(dt);
       // paddle track during fade
-      if (pointerX != null && paddle) {
-        paddle.x = pointerX - paddle.w / 2;
-        paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
-      }
+      trackPaddlePointer();
       if (ball && paddle) stickBallToPaddle();
       updateBg(dt * 0.4);
       return;
@@ -6295,19 +6316,11 @@
     if (bigPaddleUntil && performance.now() < bigPaddleUntil) {
       const target = basePaddleW * 1.35;
       if (Math.abs(paddle.w - target) > 0.5) {
-        const cx = paddle.x + paddle.w / 2;
-        paddle.w = target;
-        paddle.h = paddleHeightForWidth(paddle.w);
-        paddle.y = H - 28 - paddle.h;
-        paddle.x = cx - paddle.w / 2;
+        resizePaddleKeepCenter(target, paddleHeightForWidth(target));
       }
     } else if (bigPaddleUntil && performance.now() >= bigPaddleUntil) {
       bigPaddleUntil = 0;
-      const cx = paddle.x + paddle.w / 2;
-      paddle.w = basePaddleW;
-      paddle.h = paddleHeightForWidth(paddle.w);
-      paddle.y = H - 28 - paddle.h;
-      paddle.x = cx - paddle.w / 2;
+      resizePaddleKeepCenter(basePaddleW, paddleHeightForWidth(basePaddleW));
     }
     updateBg(dt);
     updateL6RookFormation(dt);
@@ -6338,9 +6351,9 @@
         p.vx *= p.metal ? 0.96 : 0.98;
       }
       const prevPxS = paddle.x;
-      if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
-      paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
-      if (Math.abs(paddle.x - prevPxS) > 0.4) {
+      const prevPyS = paddle.y;
+      trackPaddlePointer();
+      if (Math.abs(paddle.x - prevPxS) > 0.4 || Math.abs(paddle.y - prevPyS) > 0.4) {
         paddleTrail.push({
           x: paddle.x + paddle.w / 2,
           y: paddle.y + paddle.h / 2,
@@ -6381,9 +6394,9 @@
     updateLaserCannons(dt);
 
     const prevPx = paddle.x;
-    if (pointerX != null) paddle.x = pointerX - paddle.w / 2;
-    paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
-    const moved = Math.abs(paddle.x - prevPx);
+    const prevPy = paddle.y;
+    trackPaddlePointer();
+    const moved = Math.abs(paddle.x - prevPx) + Math.abs(paddle.y - prevPy);
     if (moved > 0.4) {
       paddleTrail.push({
         x: paddle.x + paddle.w / 2,
@@ -6454,22 +6467,27 @@
       if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy = Math.abs(ball.vy); }
 
       if (
-        ball.vy > 0 &&
         ball.y + ball.r >= paddle.y &&
         ball.y - ball.r <= paddle.y + paddle.h &&
         ball.x >= paddle.x - 2 &&
         ball.x <= paddle.x + paddle.w + 2
       ) {
-        ball.y = paddle.y - ball.r - 0.5;
         const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
-        const ang = -Math.PI / 2 + Math.max(-1, Math.min(1, hit)) * 1.05;
+        const hitClamped = Math.max(-1, Math.min(1, hit));
+        const fromAbove = ball.y < paddle.y + paddle.h * 0.5;
+        // Desde arriba: rebote hacia arriba; desde abajo: hacia abajo (pala libre)
+        const ang = fromAbove
+          ? (-Math.PI / 2 + hitClamped * 1.05)
+          : (Math.PI / 2 - hitClamped * 1.05);
         const sp = Math.max(ball.speed || 0, Math.hypot(ball.vx, ball.vy), 3.2);
+        if (fromAbove) ball.y = paddle.y - ball.r - 0.5;
+        else ball.y = paddle.y + paddle.h + ball.r + 0.5;
         ball.vx = Math.cos(ang) * sp;
         ball.vy = Math.sin(ang) * sp;
         ball.speed = Math.max(ball.speed || 0, sp);
         ballLastAng = ang;
         ballStallT = 0;
-        spawnMetalSparks(ball.x, paddle.y);
+        spawnMetalSparks(ball.x, fromAbove ? paddle.y : paddle.y + paddle.h);
       }
 
       collideBricksWithBall();
@@ -7227,13 +7245,17 @@
   function onDown(e) {
     e.preventDefault();
     if (paused) return;
-    pointerX = pointerPos(e).x;
+    const p = pointerPos(e);
+    pointerX = p.x;
+    pointerY = p.y;
     if (window.__gotoNext) { startNextLevel(); return; }
     if (!launched && !gameOver && !won && !l6Transit && !(level().queenBoss && l8Intro)) launch();
   }
   function onMove(e) {
     e.preventDefault();
-    pointerX = pointerPos(e).x;
+    const p = pointerPos(e);
+    pointerX = p.x;
+    pointerY = p.y;
   }
 
   canvas.addEventListener('pointerdown', onDown, { passive: false });
