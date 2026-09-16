@@ -9095,7 +9095,7 @@
   /** Cinemáticas por nivel: video string o { type:'slides', manifest }. */
   const LEVEL_INTROS = {
     1: 'intro-level2.mp4?v=3',
-    2: { type: 'slides', manifest: 'intro-l2/slides.json' },
+    2: 'intro-l2.mp4?v=1',
     3: 'intro-level3.mp4?v=1',
   };
   function introsDisabled() {
