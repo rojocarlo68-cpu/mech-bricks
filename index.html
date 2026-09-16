@@ -323,6 +323,15 @@
       border: 1px solid rgba(255,180,80,.45); border-radius: 8px;
       padding: 10px 14px; font-weight: 700; letter-spacing: .04em;
     }
+    #introTap {
+      position: absolute; inset: 0; z-index: 3;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.72); color: #ffe0b0;
+      font-size: clamp(18px, 5vw, 28px); font-weight: 800;
+      letter-spacing: .06em; text-transform: uppercase;
+      text-shadow: 0 2px 8px #000;
+    }
+    #introTap.show { display: flex; }
     #comboHud {
       display: none;
       margin-left: 8px;
@@ -496,6 +505,11 @@
       </div>
     </div>
   </div>
-  <script src="game.js?v=80"></script>
+  <div id="introOverlay" aria-hidden="true">
+    <video id="introVideo" playsinline webkit-playsinline preload="auto" src="intro.mp4?v=3"></video>
+    <div id="introTap" class="show">Toca para ver el intro</div>
+    <button type="button" id="introSkip">Saltar intro</button>
+  </div>
+  <script src="game.js?v=81"></script>
 </body>
 </html>

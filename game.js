@@ -8944,47 +8944,70 @@
       const overlay = document.getElementById('introOverlay');
       const vid = document.getElementById('introVideo');
       const skip = document.getElementById('introSkip');
-      if (!overlay || !vid) { resolve(); return; }
+      const tap = document.getElementById('introTap');
+      if (!overlay || !vid) {
+        console.warn('[intro] overlay/video missing');
+        resolve();
+        return;
+      }
       let done = false;
+      const hideTap = () => { if (tap) tap.classList.remove('show'); };
       const finish = () => {
         if (done) return;
         done = true;
         try { vid.pause(); } catch (_) {}
+        hideTap();
         overlay.classList.remove('show');
         overlay.setAttribute('aria-hidden', 'true');
-        skip && skip.removeEventListener('click', onSkip);
+        if (skip) skip.removeEventListener('click', onSkip);
+        if (tap) tap.removeEventListener('pointerdown', onTapPlay);
         vid.removeEventListener('ended', finish);
-        vid.removeEventListener('error', finish);
+        vid.removeEventListener('error', onErr);
         resolve();
       };
-      const onSkip = (e) => { e && e.stopPropagation(); finish(); };
+      const onSkip = (e) => { e && e.preventDefault(); e && e.stopPropagation(); finish(); };
+      const onErr = () => {
+        console.warn('[intro] video error', vid.error);
+        // No saltar en silencio: deja el tap visible
+        if (tap) tap.classList.add('show');
+      };
+      const startPlay = () => {
+        hideTap();
+        const p = vid.play();
+        if (p && typeof p.then === 'function') {
+          p.then(hideTap).catch(() => { if (tap) tap.classList.add('show'); });
+        }
+      };
+      const onTapPlay = (e) => {
+        e && e.preventDefault();
+        e && e.stopPropagation();
+        startPlay();
+      };
       overlay.classList.add('show');
       overlay.setAttribute('aria-hidden', 'false');
+      if (tap) {
+        tap.classList.add('show');
+        tap.addEventListener('pointerdown', onTapPlay);
+      }
       if (skip) skip.addEventListener('click', onSkip);
       vid.addEventListener('ended', finish);
-      vid.addEventListener('error', finish);
-      vid.currentTime = 0;
-      const p = vid.play();
-      if (p && typeof p.then === 'function') {
-        p.catch(() => {
-          // Autoplay bloqueado: un toque en el overlay inicia o salta
-          const kick = () => {
-            overlay.removeEventListener('pointerdown', kick);
-            vid.play().catch(() => finish());
-          };
-          overlay.addEventListener('pointerdown', kick, { once: true });
-        });
-      }
+      vid.addEventListener('error', onErr);
+      try { vid.currentTime = 0; } catch (_) {}
+      // Intento de autoplay; si falla, queda "Toca para ver el intro"
+      startPlay();
     });
   }
 
   (async function init() {
     try {
-      await Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts(), loadBallSkin()]);
-      if (shouldPlayCampaignIntro()) {
+      const wantIntro = shouldPlayCampaignIntro();
+      // Intro primero (assets del nivel cargan en paralelo)
+      const assetsP = Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts(), loadBallSkin()]);
+      if (wantIntro) {
         loading.classList.add('hide');
         await playCampaignIntro();
       }
+      await assetsP;
       buildLevel();
       applyBootMoney(true);
       loading.classList.add('hide');
