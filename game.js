@@ -8929,9 +8929,62 @@
     btnBomb.addEventListener('pointerdown', onBombPress);
   }
 
+
+  function shouldPlayCampaignIntro() {
+    try {
+      const q = new URLSearchParams(location.search);
+      if (q.get('skipintro') === '1' || q.get('nointro') === '1') return false;
+      // Solo al empezar campaña en nivel 1 (no deep-links a otros niveles)
+      if (levelIndex !== 0) return false;
+      return true;
+    } catch (_) { return levelIndex === 0; }
+  }
+  function playCampaignIntro() {
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('introOverlay');
+      const vid = document.getElementById('introVideo');
+      const skip = document.getElementById('introSkip');
+      if (!overlay || !vid) { resolve(); return; }
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try { vid.pause(); } catch (_) {}
+        overlay.classList.remove('show');
+        overlay.setAttribute('aria-hidden', 'true');
+        skip && skip.removeEventListener('click', onSkip);
+        vid.removeEventListener('ended', finish);
+        vid.removeEventListener('error', finish);
+        resolve();
+      };
+      const onSkip = (e) => { e && e.stopPropagation(); finish(); };
+      overlay.classList.add('show');
+      overlay.setAttribute('aria-hidden', 'false');
+      if (skip) skip.addEventListener('click', onSkip);
+      vid.addEventListener('ended', finish);
+      vid.addEventListener('error', finish);
+      vid.currentTime = 0;
+      const p = vid.play();
+      if (p && typeof p.then === 'function') {
+        p.catch(() => {
+          // Autoplay bloqueado: un toque en el overlay inicia o salta
+          const kick = () => {
+            overlay.removeEventListener('pointerdown', kick);
+            vid.play().catch(() => finish());
+          };
+          overlay.addEventListener('pointerdown', kick, { once: true });
+        });
+      }
+    });
+  }
+
   (async function init() {
     try {
       await Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts(), loadBallSkin()]);
+      if (shouldPlayCampaignIntro()) {
+        loading.classList.add('hide');
+        await playCampaignIntro();
+      }
       buildLevel();
       applyBootMoney(true);
       loading.classList.add('hide');
