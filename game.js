@@ -156,7 +156,7 @@
   let imgDataLower = null;
   let imgDataUpper = null;
   let paddle, ball;
-  let running = false, launched = false, gameOver = false, won = false;
+  let running = false, launched = false, paddleLaunchGrace = 0, gameOver = false, won = false;
   let ballStallT = 0;
   let ballLastAng = -Math.PI / 2;
   let score = 0, lives = START_LIVES, aliveCount = 0;
@@ -1020,10 +1020,14 @@
     try { updateAddictionHud(); } catch (_) {}
   }
 
+  function ballRestGap() {
+    // Holgura clara sobre la pala (evita que el primer toque la meta debajo)
+    return Math.max(18, (ball && ball.r ? ball.r : 6) * 2.8);
+  }
   function stickBallToPaddle() {
     if (!ball || !paddle) return;
     ball.x = paddle.x + paddle.w / 2;
-    ball.y = paddle.y - ball.r - 2;
+    ball.y = paddle.y - ball.r - ballRestGap();
     ball.vx = 0;
     ball.vy = 0;
     ballStallT = 0;
@@ -5648,7 +5652,13 @@
     if (launched || gameOver || won) return;
     if (level().queenBoss && (l8Intro || l8Phase === 'intro')) return;
     launched = true;
+    paddleLaunchGrace = 0.35; // ignorar colisión pala↔bola al salir
     hint.classList.remove('show');
+    // Reposicionar SIEMPRE por encima de la pala antes de soltar
+    if (ball && paddle) {
+      ball.x = paddle.x + paddle.w / 2;
+      ball.y = paddle.y - ball.r - ballRestGap();
+    }
     if (!(ball.speed > 0.5)) {
       ball.speed = Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * effectiveBallSpeedMult();
     }
@@ -5656,7 +5666,7 @@
     const angle = -Math.PI / 2 + swipe * 0.7 + (Math.abs(paddleVx) < 0.4 ? (Math.random() - 0.5) * 0.35 : 0);
     ball.vx = Math.cos(angle) * ball.speed + paddleVx * 0.45;
     ball.vy = Math.sin(angle) * ball.speed;
-    if (ball.vy > -2) ball.vy = -2;
+    if (ball.vy > -2.8) ball.vy = -2.8;
     ball.speed = Math.hypot(ball.vx, ball.vy);
     ballLastAng = Math.atan2(ball.vy, ball.vx);
     ballStallT = 0;
@@ -5915,6 +5925,7 @@
     updateHud();
     if (checkGameOver()) return;
     launched = false;
+    paddleLaunchGrace = 0;
     stickBallToPaddle();
     hint.classList.add('show');
     hint.innerHTML = '<strong>Vida perdida</strong><span>Toca para lanzar de nuevo</span>';
@@ -7202,6 +7213,7 @@
     trackPaddlePointer();
     movePaddleKeyboard(dt);
     samplePaddleVelocity(dt);
+    if (paddleLaunchGrace > 0) paddleLaunchGrace = Math.max(0, paddleLaunchGrace - dt);
     const moved = Math.abs(paddle.x - prevPx) + Math.abs(paddle.y - prevPy);
     if (moved > 0.4) {
       paddleTrail.push({
@@ -7273,19 +7285,25 @@
       if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy = Math.abs(ball.vy); }
 
       if (
+        paddleLaunchGrace <= 0 &&
         ball.y + ball.r >= paddle.y &&
         ball.y - ball.r <= paddle.y + paddle.h &&
         ball.x >= paddle.x - 2 &&
         ball.x <= paddle.x + paddle.w + 2
       ) {
         const fromAbove = ball.y < paddle.y + paddle.h * 0.5;
-        if (fromAbove) ball.y = paddle.y - ball.r - 0.5;
-        else ball.y = paddle.y + paddle.h + ball.r + 0.5;
-        const ang = bounceWithPaddleEnglish(ball, fromAbove);
-        ballLastAng = ang;
-        ballStallT = 0;
-        spawnMetalSparks(ball.x, fromAbove ? paddle.y : paddle.y + paddle.h);
-        try { triggerHitStop(40); bumpCam(0.35 + Math.min(1.2, comboMult * 0.15)); } catch (_) {}
+        // Tras el lanzamiento, si quedara "debajo", empujar arriba en vez de rebotar hacia el suelo
+        if (!fromAbove && ball.vy < 0) {
+          ball.y = paddle.y - ball.r - ballRestGap();
+        } else {
+          if (fromAbove) ball.y = paddle.y - ball.r - 0.5;
+          else ball.y = paddle.y + paddle.h + ball.r + 0.5;
+          const ang = bounceWithPaddleEnglish(ball, fromAbove);
+          ballLastAng = ang;
+          ballStallT = 0;
+          spawnMetalSparks(ball.x, fromAbove ? paddle.y : paddle.y + paddle.h);
+          try { triggerHitStop(40); bumpCam(0.35 + Math.min(1.2, comboMult * 0.15)); } catch (_) {}
+        }
       }
 
       collideBricksWithBall();
@@ -8141,9 +8159,19 @@
     try {
       if (e.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
     } catch (_) {}
-    applyPaddleFromPointer();
     if (window.__gotoNext) { startNextLevel(); return; }
-    if (!launched && !gameOver && !won && !l6Transit && !(level().queenBoss && l8Intro)) launch();
+    if (!launched && !gameOver && !won && !l6Transit && !(level().queenBoss && l8Intro)) {
+      // Antes del lanzamiento: solo seguir en X (no subir la pala sobre la bola)
+      if (paddle && pointerX != null) {
+        paddle.x = pointerX - grabOffsetX;
+        paddle.x = Math.max(6, Math.min(W - paddle.w - 6, paddle.x));
+        if (isKingLevel7()) paddle.y = H - 8 - paddle.h;
+      }
+      if (ball) stickBallToPaddle();
+      launch();
+    } else {
+      applyPaddleFromPointer();
+    }
   }
   function onMove(e) {
     e.preventDefault();
