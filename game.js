@@ -395,7 +395,7 @@
     ensureJuiceHud();
     if (comboHudEl) {
       if (comboCount >= 2) {
-        comboHudEl.textContent = 'COMBO x' + comboMult + (comboCount > 5 ? ' · ' + comboCount : '');
+        comboHudEl.textContent = '¡COMBO x' + comboMult + '!';
         comboHudEl.classList.add('show');
       } else comboHudEl.classList.remove('show');
     }
@@ -440,18 +440,7 @@
   }
   function drawAddictionCanvas() {
     drawCoinFly();
-    if (comboFlashT > 0 && comboCount >= 2) {
-      ctx.save();
-      ctx.font = 'bold 22px system-ui';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = `rgba(255,210,90,${Math.min(1, comboFlashT)})`;
-      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-      ctx.lineWidth = 3;
-      const label = 'COMBO x' + comboMult;
-      ctx.strokeText(label, W * 0.5, 54);
-      ctx.fillText(label, W * 0.5, 54);
-      ctx.restore();
-    }
+    // Combo HUD is DOM (esquina, estilo cómic) — no pintar en el centro del canvas
   }
   function noteLevelStart() {
     levelStartMs = performance.now();
