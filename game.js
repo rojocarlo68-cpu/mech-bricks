@@ -3299,6 +3299,8 @@
     structureAngle = 0; structureAV = 0;
     originX = 0; originY = 0;
     fitScale = 1;
+    l8Debris = [];
+    if (particles && particles.length > 80) particles = particles.slice(-80);
   }
 
   function beginL8HeadPhase() {
@@ -3309,6 +3311,9 @@
     window.__outroDust = false;
     window.__gotoNext = false;
     clearL8HandStructures();
+    l8Debris = [];
+    if (particles && particles.length > 80) particles = particles.slice(-80);
+    l8ExtraDust = [];
     l8Phase = 'head';
     l8EyeFlashT = 1.0;
     l8Lasers = [];
@@ -5114,8 +5119,8 @@
 
   /** Explosión espectacular de bomba de tienda: fuego, humo, chispas, escombros. */
   function spawnShopBombBlast(x, y) {
-    // Fase resto-armadura: FX mínimo (la bomba full congela el teléfono)
-    if (isL8ArmorRest()) {
+    // L8 manos/cabeza/armadura: FX mínimo (la bomba full congela el teléfono)
+    if (isL8ArmorRest() || (level().queenBoss && (l8Phase === 'hands' || l8Phase === 'head'))) {
       bumpCam(2.2);
       spawnDust(x, y, 'rgb(255,160,60)', 14, { spread: 1.6, up: 2.0, jitter: 10 });
       spawnDust(x, y, 'rgb(70,65,60)', 10, { spread: 1.4, up: 1.6, jitter: 12 });
@@ -5160,8 +5165,8 @@
   }
 
   function flingBricksFromBlast(x, y, R) {
-    // Resto armadura: no simular vuelo de cientos de ladrillos
-    if (isL8ArmorRest()) return;
+    // L8 manos/cabeza/armadura: no simular vuelo de cientos/miles de ladrillos
+    if (isL8ArmorRest() || (level().queenBoss && (l8Phase === 'hands' || l8Phase === 'head'))) return;
     const r2 = R * R;
     const fling = (list) => {
       for (const br of list) {
@@ -5201,6 +5206,57 @@
     };
     if (structures.length) eachStructure(() => fling(bricks));
     else fling(bricks);
+  }
+
+  /** Bomba L8 manos/cabeza: FX liviano + despawn instantáneo en radio (sin fling ni blast shop). */
+  function detonateL8BossBombLight(x, y, R) {
+    bumpCam(Math.min(3, 2.4));
+    spawnDust(x, y, 'rgb(255,160,60)', 8, { spread: 1.2, up: 1.4, jitter: 8 });
+    spawnDust(x, y, 'rgb(90,85,80)', 6, { spread: 1.1, up: 1.2, jitter: 9 });
+    spawnDust(x, y - 4, 'rgb(200,190,170)', 5, { spread: 1.0, up: 1.0, jitter: 7 });
+    const rad = (typeof R === 'number' && R > 0) ? R : ((typeof EXPLODE_R === 'number' ? EXPLODE_R : 40) * 2.05);
+    const r2 = rad * rad;
+    let hit = 0;
+    const killInRadius = () => {
+      for (let i = 0; i < bricks.length; i++) {
+        const br = bricks[i];
+        if (!br.alive) continue;
+        const cx = br.x + br.w * 0.5;
+        const cy = br.y + br.h * 0.5;
+        const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+        if (d2 > r2) continue;
+        const wasStructure = !br.falling;
+        br.alive = false;
+        br.falling = false;
+        br.settled = false;
+        if (wasStructure && !br.panel) {
+          const g = gridForBrick(br);
+          let id = -1;
+          if (g) {
+            const gi = br.iy * cols + br.ix;
+            id = (gi >= 0 && gi < g.length) ? g[gi] : -1;
+          }
+          clearBrickGrid(br, id >= 0 ? id : bricks.indexOf(br));
+        }
+        score += 1;
+        hit++;
+      }
+    };
+    if (structures.length) {
+      eachStructure(() => {
+        killInRadius();
+        try { rebuildBrickLayerAlive(); } catch (_) {}
+      });
+    } else {
+      killInRadius();
+      try { rebuildBrickLayerAlive(); } catch (_) {}
+      refreshTotalStructureCount();
+    }
+    if (particles.length > 280) particles = particles.slice(-280);
+    window.__hudBrickDirty = true;
+    updateHud();
+    if (hit) maybeWin();
+    return hit;
   }
 
   /** Bomba L8 torso: soltar refs al instante → cinemática (0 simulación). */
@@ -7722,13 +7778,19 @@
     if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx); }
     if (b.y - b.r < 0) { b.y = b.r; b.vy = Math.abs(b.vy); }
 
-    // L8 torso ghost: solo vuela y detona por tiempo/altura — CERO hit-test de ladrillos
+    // L8 ghost (manos/cabeza/torso): solo vuela y detona por tiempo/altura — CERO hit-test de ladrillos
     if (b.l8Ghost) {
       if (b.t >= 0.55 || b.y < H * 0.36) {
         const bx = b.x, by = b.y;
+        const R = (typeof EXPLODE_R === 'number' ? EXPLODE_R : 40) * 2;
         b.alive = false;
         playerBomb = null;
-        detonateArmorBombFast(bx, by, (typeof EXPLODE_R === 'number' ? EXPLODE_R : 40) * 2);
+        if (level().queenBoss && l8Phase === 'torso') {
+          detonateArmorBombFast(bx, by, R);
+        } else {
+          // hands / head (y cualquier ghost no-torso)
+          detonateL8BossBombLight(bx, by, R);
+        }
       }
       return;
     }
@@ -7756,6 +7818,8 @@
       const R = EXPLODE_R * 2.05;
       if (level().queenBoss && l8Phase === 'torso') {
         detonateArmorBombFast(bx, by, R * 1.05);
+      } else if (level().queenBoss && (l8Phase === 'hands' || l8Phase === 'head')) {
+        detonateL8BossBombLight(bx, by, R);
       } else {
         spawnShopBombBlast(bx, by);
         flingBricksFromBlast(bx, by, R);
@@ -9303,6 +9367,7 @@
       vy = -4.6;
     }
 
+    const l8BossGhost = !!(level().queenBoss && (l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso'));
     const l8TorsoBomb = !!(level().queenBoss && l8Phase === 'torso');
     playerBomb = {
       x, y, vx, vy,
@@ -9310,15 +9375,17 @@
       phase: 'fuse',
       t: 0,
       alive: true,
-      // Fantasma L8: no hace hit-test contra miles de ladrillos (eso congelaba al lanzar)
-      l8Ghost: l8TorsoBomb,
+      // Fantasma L8: no hit-test contra miles de ladrillos (congelaba al 2º bomb en manos)
+      l8Ghost: l8BossGhost,
     };
     playerBombArmed = false;
     setBombButton(false);
     hint.classList.add('show');
     hint.innerHTML = l8TorsoBomb
       ? '<strong>💣 Bomba</strong><span>Detona en el núcleo…</span>'
-      : '<strong>💣 Bomba en camino</strong><span>Explota al tocar un ladrillo</span>';
+      : (l8BossGhost
+        ? '<strong>💣 Bomba</strong><span>Detona cerca del objetivo…</span>'
+        : '<strong>💣 Bomba en camino</strong><span>Explota al tocar un ladrillo</span>');
     clearTimeout(window.__hintHide);
     window.__hintHide = setTimeout(() => {
       if (!paused && !gameOver) hint.classList.remove('show');
