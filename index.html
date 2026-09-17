@@ -362,6 +362,12 @@
       text-shadow: 0 2px 8px #000;
     }
     #introTap.show { display: flex; }
+    #introFade {
+      position: fixed; inset: 0; z-index: 85;
+      background: #000; opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.45s ease;
+    }
     #comboHud {
       display: none;
       pointer-events: none;
@@ -824,6 +830,7 @@
     <div id="introTap" class="show">Toca para ver el intro</div>
     <button type="button" id="introSkip">skip</button>
   </div>
+  <div id="introFade" aria-hidden="true"></div>
 
   <div id="titleScreen" class="show" aria-hidden="false">
     <div id="titleStage">
@@ -883,7 +890,7 @@
       <div id="estateTray" aria-label="Catalogo de terreno"></div>
     </div>
   </div>
-  <script src="game.js?v=96"></script>
+  <script src="game.js?v=97"></script>
   <script src="estate.js?v=2"></script>
 </body>
 </html>

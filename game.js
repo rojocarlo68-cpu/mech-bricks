@@ -156,6 +156,7 @@
     { id: 'shield', name: 'Escudo', desc: 'Bloquea el próximo daño', icon: '🛡️', price: 2100 },
     { id: 'bomb', name: 'Bomba', desc: 'Arma y dispara desde el botón arriba', icon: '💣', price: 2090 },
     { id: 'paddle', name: 'Paleta grande', desc: 'Paleta +35% por 20s', icon: '📏', price: 2110 },
+    { id: 'paddlexr12', name: 'Paleta XR-12', desc: 'Skin 3D · estela turquesa', icon: '🔷', price: 5490, minLevel: 1, paddleSkin: true },
     { id: 'ballskin', name: 'Bola grabada', desc: 'Skin de bola · dureza +10%', icon: '🪩', price: 27799, minLevel: 3, img: 'ball-skin.png', ballPower: 1.1 },
     { id: 'ballsilbadora', name: 'La silbadora', desc: 'Skin · dureza +20% · rastro de aire', icon: '💨', price: 36699, minLevel: 5, img: 'ball-silbadora.png', ballPower: 1.2 },
   ];
@@ -563,7 +564,7 @@
     const today = todayKey();
     if (dailyDealDate === today && dailyDealId) return;
     const h = hashStr(today + ':deal');
-    const pool = SHOP.filter((it) => it.ballPower == null);
+    const pool = SHOP.filter((it) => it.ballPower == null && !it.paddleSkin);
     dailyDealId = pool[h % pool.length].id;
     dailyDealDate = today;
     try { localStorage.setItem(LS_DAILY_DEAL, JSON.stringify({ date: today, id: dailyDealId })); } catch (_) {}
@@ -592,7 +593,7 @@
       return;
     }
     score -= cost;
-    const cheap = SHOP.filter((s) => s.ballPower == null && s.price <= 2200);
+    const cheap = SHOP.filter((s) => s.ballPower == null && !s.paddleSkin && s.price <= 2200);
     const h = hashStr(today + ':chest:' + (score | 0));
     const pick = cheap[h % cheap.length];
     backpack.push(pick.id);
@@ -650,8 +651,13 @@
   }
   function renderCollectionHtml() {
     const ballIds = SHOP.filter((s) => s.ballPower != null).map((s) => s.id);
+    const paddleSkinIds = SHOP.filter((s) => s.paddleSkin).map((s) => s.id);
     const rows = [
-      { id: 'paddle', name: 'Paleta clásica', owned: !!ownedSkins.paddle },
+      { id: 'paddle', name: 'Paleta clásica', owned: !!ownedSkins.paddle || activePaddleSkin === 'classic' },
+      ...paddleSkinIds.map((id) => {
+        const it = SHOP.find((s) => s.id === id);
+        return { id, name: it ? it.name : id, owned: !!ownedSkins[id] || activePaddleSkin === id };
+      }),
       ...ballIds.map((id) => {
         const it = SHOP.find((s) => s.id === id);
         return { id, name: it ? it.name : id, owned: !!ownedSkins[id] || activeBallSkin === id };
@@ -674,7 +680,12 @@
   let paddleImg = null;
   let paddleLaserImg = null;
   /** Idle 3D frames: 1 bottom, 2 yaw-right, 3 above-right, 5 center, 6 from-below (skip 4/7/8). */
-  let paddle3dImgs = { 1: null, 2: null, 3: null, 5: null, 6: null };
+  let paddle3dClassic = { 1: null, 2: null, 3: null, 5: null, 6: null };
+  let paddle3dXr = { 1: null, 2: null, 3: null, 5: null, 6: null };
+  let activePaddleSkin = 'classic'; // 'classic' | 'paddlexr12'
+  function activePaddle3dSet() {
+    return activePaddleSkin === 'paddlexr12' ? paddle3dXr : paddle3dClassic;
+  }
   /** Death explode frames 1..8 */
   let paddleExplodeImgs = [null, null, null, null, null, null, null, null];
   let paddleDeathAnim = null; // { frame, elapsed, x, y, w, h } | null
@@ -2043,15 +2054,18 @@
     hint.classList.remove('show');
     try {
       const assetsP = Promise.all([loadImage(), loadBg()]);
+      let playedIntro = false;
       if (shouldPlayLevelIntro()) {
         loading.classList.add('hide');
         paused = true; // congelar partida mientras corre la cinemática
         await playLevelIntro(level().id);
-        paused = false;
+        playedIntro = true;
       }
       await assetsP;
       buildLevel();
       loading.classList.add('hide');
+      if (playedIntro) await fadeFromBlack(400);
+      paused = false;
     } catch (err) {
       paused = false;
       loading.textContent = 'No pude cargar el nivel.';
@@ -7507,6 +7521,7 @@
   }
 
   function drawPaddleTrail() {
+    const xr = activePaddleSkin === 'paddlexr12';
     for (let i = 0; i < paddleTrail.length; i++) {
       const t = paddleTrail[i];
       const a = Math.max(0, t.life);
@@ -7518,12 +7533,21 @@
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       const g = ctx.createLinearGradient(tx, ty, tx + tw, ty);
-      g.addColorStop(0, `rgba(40,160,255,0)`);
-      g.addColorStop(0.5, `rgba(80,200,255,${0.22 * a})`);
-      g.addColorStop(1, `rgba(40,160,255,0)`);
-      ctx.fillStyle = g;
-      ctx.fillRect(tx, ty + th * 0.15, tw, th * 0.7);
-      ctx.fillStyle = `rgba(180,240,255,${0.12 * a})`;
+      if (xr) {
+        g.addColorStop(0, `rgba(0,220,210,0)`);
+        g.addColorStop(0.5, `rgba(64,255,230,${0.32 * a})`);
+        g.addColorStop(1, `rgba(0,220,210,0)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(tx, ty + th * 0.15, tw, th * 0.7);
+        ctx.fillStyle = `rgba(180,255,245,${0.18 * a})`;
+      } else {
+        g.addColorStop(0, `rgba(40,160,255,0)`);
+        g.addColorStop(0.5, `rgba(80,200,255,${0.22 * a})`);
+        g.addColorStop(1, `rgba(40,160,255,0)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(tx, ty + th * 0.15, tw, th * 0.7);
+        ctx.fillStyle = `rgba(180,240,255,${0.12 * a})`;
+      }
       ctx.fillRect(tx + tw * 0.15, ty + th * 0.3, tw * 0.7, th * 0.4);
       ctx.restore();
     }
@@ -7551,7 +7575,8 @@
     else if (midX && !bottom && !top) { key = 5; flip = false; }
     else if (bottom || ny >= 0.5) { key = 1; flip = false; }
     else { key = 6; flip = false; }
-    const img = paddle3dImgs[key] || paddle3dImgs[1] || paddleImg;
+    const set = activePaddle3dSet();
+    const img = set[key] || set[1] || paddleImg;
     return { img, flip };
   }
 
@@ -8424,7 +8449,7 @@
         void (async () => {
           hideSoftFail();
           await showRetryInterstitialAd();
-          await startNewGameFromTitle();
+          await startNewGameFromTitle({ skipIntro: true });
         })().catch((err) => console.warn(err));
       } else if (act === 'menu') {
         hideSoftFail();
@@ -8564,15 +8589,25 @@
       loadSoft('paddle-explode-6.png'),
       loadSoft('paddle-explode-7.png'),
       loadSoft('paddle-explode-8.png'),
+      loadSoft('paddle-xr12-1-bottom.png'),
+      loadSoft('paddle-xr12-2-yaw-right.png'),
+      loadSoft('paddle-xr12-3-above-right.png'),
+      loadSoft('paddle-xr12-5-center.png'),
+      loadSoft('paddle-xr12-6-from-below.png'),
     ]).then((imgs) => {
       paddleImg = imgs[0];
       paddleLaserImg = imgs[1];
-      paddle3dImgs[1] = imgs[2];
-      paddle3dImgs[2] = imgs[3];
-      paddle3dImgs[3] = imgs[4];
-      paddle3dImgs[5] = imgs[5];
-      paddle3dImgs[6] = imgs[6];
+      paddle3dClassic[1] = imgs[2];
+      paddle3dClassic[2] = imgs[3];
+      paddle3dClassic[3] = imgs[4];
+      paddle3dClassic[5] = imgs[5];
+      paddle3dClassic[6] = imgs[6];
       for (let i = 0; i < 8; i++) paddleExplodeImgs[i] = imgs[7 + i];
+      paddle3dXr[1] = imgs[15];
+      paddle3dXr[2] = imgs[16];
+      paddle3dXr[3] = imgs[17];
+      paddle3dXr[5] = imgs[18];
+      paddle3dXr[6] = imgs[19];
     });
   }
 
@@ -8694,7 +8729,8 @@
     try { syncLevelUrl(); } catch (_) {}
   }
 
-  async function startNewGameFromTitle() {
+  async function startNewGameFromTitle(opts) {
+    const skipIntro = !!(opts && opts.skipIntro);
     hideTitleScreen();
     menuReturnToTitle = false;
     resetCampaignToLevel1();
@@ -8711,9 +8747,11 @@
     hint.classList.remove('show');
     try {
       const assetsP = Promise.all([loadImage(), loadBg()]);
-      if (shouldPlayLevelIntro()) {
+      let playedIntro = false;
+      if (!skipIntro && shouldPlayLevelIntro()) {
         loading.classList.add('hide');
         await playLevelIntro(level().id);
+        playedIntro = true;
       }
       await assetsP;
       try { await Promise.all([loadPaddle(), loadBombArts(), loadBallSkin()]); } catch (_) {}
@@ -8721,6 +8759,7 @@
       applyBootMoney(false);
       updateHud();
       loading.classList.add('hide');
+      if (playedIntro) await fadeFromBlack(400);
       paused = false;
     } catch (err) {
       paused = false;
@@ -8907,30 +8946,53 @@
       if (it.minLevel != null && lvl < it.minLevel) return false;
       // ball skins: hide if active or already in backpack
       if (it.ballPower != null && (activeBallSkin === it.id || backpack.includes(it.id))) return false;
+      // paddle skins: hide if equipped or already in backpack
+      if (it.paddleSkin && (activePaddleSkin === it.id || backpack.includes(it.id))) return false;
       return true;
     }).map((it) => {
       const price = shopPrice(it);
       const deal = it.id === dailyDealId;
       const full = backpack.length >= PACK_MAX;
       const broke = score < price;
-      const disabled = full || broke;
+      const canEquipSkin = !!(it.paddleSkin && ownedSkins[it.id] && activePaddleSkin !== it.id);
+      const disabled = canEquipSkin ? false : (full || broke);
       let why = '';
-      if (full) why = 'Mochila llena';
-      else if (broke) why = 'Sin fondos';
+      if (!canEquipSkin) {
+        if (full) why = 'Mochila llena';
+        else if (broke) why = 'Sin fondos';
+      }
       const iconHtml = it.img
         ? `<div class="icon"><img src="${it.img}" alt="" style="width:36px;height:36px;object-fit:contain;border-radius:50%"></div>`
         : `<div class="icon">${it.icon}</div>`;
-      const priceLabel = (deal ? '🔥 ' : '') + (price >= 1000 ? ('$' + price.toLocaleString('en-US')) : ('$' + price));
+      const priceLabel = canEquipSkin
+        ? 'En colección'
+        : ((deal ? '🔥 ' : '') + (price >= 1000 ? ('$' + price.toLocaleString('en-US')) : ('$' + price)));
       const name = deal ? (it.name + ' (−20%)') : it.name;
+      const btnAttr = canEquipSkin ? `data-equip="${it.id}"` : `data-buy="${it.id}"`;
+      const btnLabel = canEquipSkin ? 'Equipar' : (disabled ? why : 'Comprar');
       return `<div class="shop-item${deal ? ' daily-deal' : ''}">
         ${iconHtml}
         <div class="info"><div class="name">${name}</div><div class="desc">${it.desc}</div></div>
         <div class="price">${priceLabel}</div>
-        <button type="button" data-buy="${it.id}" ${disabled ? 'disabled' : ''}>${disabled ? why : 'Comprar'}</button>
+        <button type="button" ${btnAttr} ${disabled ? 'disabled' : ''}>${btnLabel}</button>
       </div>`;
     }).join('');
     shopList.querySelectorAll('[data-buy]').forEach((btn) => {
       btn.addEventListener('click', () => buyItem(btn.getAttribute('data-buy')));
+    });
+    shopList.querySelectorAll('[data-equip]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-equip');
+        const it = SHOP.find((s) => s.id === id);
+        if (!it || !it.paddleSkin) return;
+        activePaddleSkin = id;
+        markSkinOwned(id);
+        hint.classList.add('show');
+        hint.innerHTML = '<strong>' + (it.icon || '🔷') + ' ' + it.name + '</strong><span>Skin de paleta equipada</span>';
+        clearTimeout(window.__hintHide);
+        window.__hintHide = setTimeout(() => { if (!gameOver) hint.classList.remove('show'); }, 1800);
+        renderShop();
+      });
     });
     const chestBtn = document.getElementById('btnChest');
     if (chestBtn) chestBtn.addEventListener('click', () => buyMysteryChest());
@@ -8971,6 +9033,7 @@
     score -= price;
     backpack.push(it.id);
     if (it.ballPower != null) markSkinOwned(it.id);
+    if (it.paddleSkin) markSkinOwned(it.id);
     updateHud();
     renderShop();
   }
@@ -9032,6 +9095,11 @@
       } else {
         hint.innerHTML = '<strong>🪩 Bola grabada</strong><span>Skin activa · dureza +10%</span>';
       }
+    } else if (it.paddleSkin) {
+      activePaddleSkin = id;
+      markSkinOwned(id);
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>' + (it.icon || '🔷') + ' ' + it.name + '</strong><span>Skin de paleta activa · estela turquesa</span>';
     }
     updateHud();
     renderPack();
@@ -9250,6 +9318,7 @@
         lives,
         backpack: backpack.slice(),
         activeBallSkin,
+        activePaddleSkin,
         shieldCharges,
         laserCannonsActive: !!laserCannonsActive,
         laserExpireAt: laserCannonsActive ? (laserExpireAt || 0) : 0,
@@ -9300,6 +9369,8 @@
       lives = (typeof data.lives === 'number' && data.lives > 0) ? data.lives : START_LIVES;
       backpack = Array.isArray(data.backpack) ? data.backpack.slice(0, PACK_MAX) : [];
       activeBallSkin = data.activeBallSkin || null;
+      activePaddleSkin = (data.activePaddleSkin === 'paddlexr12') ? 'paddlexr12' : 'classic';
+      if (activePaddleSkin === 'paddlexr12') markSkinOwned('paddlexr12');
       shieldCharges = Math.max(0, data.shieldCharges | 0);
       if (typeof syncDamageFxFromLives === 'function') syncDamageFxFromLives();
       if (ball && baseBallR) ball.r = baseBallR * ballRadiusMult();
@@ -9563,7 +9634,46 @@
       img.src = src;
     })));
   }
-  function playLevelIntroSlides(manifestUrl) {
+  function ensureIntroFadeEl() {
+    let el = document.getElementById('introFade');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'introFade';
+    el.setAttribute('aria-hidden', 'true');
+    el.style.cssText = 'position:fixed;inset:0;z-index:85;background:#000;opacity:0;pointer-events:none;transition:opacity 0.45s ease;';
+    const overlay = document.getElementById('introOverlay');
+    if (overlay && overlay.parentNode) overlay.parentNode.insertBefore(el, overlay.nextSibling);
+    else document.body.appendChild(el);
+    return el;
+  }
+  function fadeIntroToBlack(ms) {
+    const dur = ms != null ? ms : 450;
+    return new Promise((resolve) => {
+      const el = ensureIntroFadeEl();
+      el.style.pointerEvents = 'auto';
+      el.style.transition = 'opacity ' + dur + 'ms ease';
+      el.style.opacity = '0';
+      void el.offsetWidth;
+      el.style.opacity = '1';
+      setTimeout(resolve, dur);
+    });
+  }
+  function fadeFromBlack(ms) {
+    const dur = ms != null ? ms : 400;
+    return new Promise((resolve) => {
+      const el = ensureIntroFadeEl();
+      el.style.pointerEvents = 'none';
+      el.style.transition = 'opacity ' + dur + 'ms ease';
+      el.style.opacity = '1';
+      void el.offsetWidth;
+      el.style.opacity = '0';
+      setTimeout(() => {
+        el.style.pointerEvents = 'none';
+        resolve();
+      }, dur);
+    });
+  }
+    function playLevelIntroSlides(manifestUrl) {
     return new Promise(async (resolve) => {
       const overlay = document.getElementById('introOverlay');
       const vid = document.getElementById('introVideo');
@@ -9606,14 +9716,16 @@
         done = true;
         if (timer) { clearTimeout(timer); timer = null; }
         hideTap();
-        panel.classList.remove('show');
-        panel.setAttribute('aria-hidden', 'true');
-        if (vid) vid.style.display = '';
-        overlay.classList.remove('show');
-        overlay.setAttribute('aria-hidden', 'true');
         if (skip) skip.removeEventListener('click', onSkip);
         overlay.removeEventListener('pointerdown', onAdvance);
-        resolve();
+        fadeIntroToBlack(450).then(() => {
+          panel.classList.remove('show');
+          panel.setAttribute('aria-hidden', 'true');
+          if (vid) vid.style.display = '';
+          overlay.classList.remove('show');
+          overlay.setAttribute('aria-hidden', 'true');
+          resolve();
+        });
       };
       const onSkip = (e) => { e && e.preventDefault(); e && e.stopPropagation(); finish(); };
       const showSlide = (i) => {
@@ -9667,13 +9779,15 @@
         done = true;
         try { vid.pause(); } catch (_) {}
         hideTap();
-        overlay.classList.remove('show');
-        overlay.setAttribute('aria-hidden', 'true');
         if (skip) skip.removeEventListener('click', onSkip);
         if (tap) tap.removeEventListener('pointerdown', onTapPlay);
         vid.removeEventListener('ended', finish);
         vid.removeEventListener('error', onErr);
-        resolve();
+        fadeIntroToBlack(450).then(() => {
+          overlay.classList.remove('show');
+          overlay.setAttribute('aria-hidden', 'true');
+          resolve();
+        });
       };
       const onSkip = (e) => { e && e.preventDefault(); e && e.stopPropagation(); finish(); };
       const onErr = () => {
@@ -9742,14 +9856,17 @@
         return;
       }
       const wantIntro = shouldPlayLevelIntro();
+      let playedIntro = false;
       if (wantIntro) {
         loading.classList.add('hide');
         await playLevelIntro(level().id);
+        playedIntro = true;
       }
       await assetsP;
       buildLevel();
       applyBootMoney(true);
       loading.classList.add('hide');
+      if (playedIntro) await fadeFromBlack(400);
       requestAnimationFrame(frame);
     } catch (err) {
       loading.textContent = 'No pude cargar la imagen.';
