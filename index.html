@@ -445,15 +445,15 @@
     }
     #titleMenu {
       position: absolute;
-      left: 8.5%;
-      top: 62%;
-      width: 83%;
-      height: 33%;
+      left: 14.5%;
+      top: 70.2%;
+      width: 71%;
+      height: 18%;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1.2fr 1fr 1fr 1fr;
-      gap: clamp(6px, 1.1vh, 12px) clamp(10px, 2vw, 18px);
-      padding: clamp(8px, 1.4vh, 16px) clamp(10px, 2vw, 18px);
+      grid-template-rows: 1.15fr 1fr 1fr 1fr;
+      gap: clamp(2px, 0.55vh, 6px) clamp(6px, 1.2vw, 10px);
+      padding: clamp(2px, 0.45vh, 5px) clamp(4px, 0.9vw, 8px);
       box-sizing: border-box;
       z-index: 2;
     }
@@ -479,9 +479,9 @@
       background: transparent;
       color: #ff9a2a;
       font-family: "Share Tech Mono", ui-monospace, "Courier New", monospace;
-      font-size: clamp(15px, 3.2vw, 24px);
+      font-size: clamp(11px, 2.35vw, 16px);
       font-weight: 700;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
       text-shadow:
         0 0 4px rgba(255, 154, 42, 0.85),
@@ -499,8 +499,8 @@
     }
     #titleMenu .title-btn.primary {
       grid-column: 1 / -1;
-      font-size: clamp(17px, 3.8vw, 28px);
-      letter-spacing: 0.16em;
+      font-size: clamp(12px, 2.7vw, 18px);
+      letter-spacing: 0.08em;
       color: #ffb24a;
       animation-duration: 2.4s;
     }
@@ -820,7 +820,7 @@
 
   <div id="titleScreen" class="show" aria-hidden="false">
     <div id="titleStage">
-      <img id="titleArt" src="title-screen.webp?v=2" alt="Mecharoid Operation 9" width="1024" height="1536" />
+      <img id="titleArt" src="title-screen.webp?v=3" alt="Mecharoid Operation 9" width="1024" height="1536" />
       <nav id="titleMenu" aria-label="Menú principal">
         <button type="button" class="title-btn primary" data-title="new">Nueva partida</button>
         <button type="button" class="title-btn" data-title="load">Cargar</button>
@@ -876,7 +876,7 @@
       <div id="estateTray" aria-label="Catalogo de terreno"></div>
     </div>
   </div>
-  <script src="game.js?v=94"></script>
+  <script src="game.js?v=95"></script>
   <script src="estate.js?v=2"></script>
 </body>
 </html>
