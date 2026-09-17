@@ -1,4 +1,4 @@
-/* Mech Arkanoid — ladrillos con soporte + gravedad realista, bombas, polvo */
+/* Mecharoid — ladrillos con soporte + gravedad realista, bombas, polvo */
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
@@ -8338,6 +8338,14 @@
   });
   window.addEventListener('keyup', (e) => { keysHeld[e.key] = false; });
 
+  // Soft-fail Reintentar: interstitial ad (if enabled) fires after press, before level 1 loads.
+  async function showRetryInterstitialAd() {
+    // Placeholder for AdSense / AdMob interstitial.
+    // When enabled, show ad here and resolve when closed/failed.
+    if (!window.__MECHAROID_ADS_ENABLED) return;
+    // future: await real SDK
+  }
+
   (function wireSoftFail() {
     const el = document.getElementById('softFail');
     if (!el) return;
@@ -8347,8 +8355,11 @@
       e.stopPropagation();
       const act = btn.getAttribute('data-act');
       if (act === 'retry') {
-        hideSoftFail();
-        resetBtn.click();
+        void (async () => {
+          hideSoftFail();
+          await showRetryInterstitialAd();
+          await startNewGameFromTitle();
+        })().catch((err) => console.warn(err));
       } else if (act === 'menu') {
         hideSoftFail();
         try { closeAllMenus(); } catch (_) {}
