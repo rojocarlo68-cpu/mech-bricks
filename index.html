@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <title>Mech Arkanoid</title>
+  <title>Mecharoid Operation 9 — Mech Bricks</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -420,9 +420,201 @@
     .col-row { font-size: 12px; opacity: .9; padding: 3px 0; }
     .col-row.locked { opacity: .45; }
     #pauseMeta { font-size: 12px; opacity: .8; margin: 6px 0 10px; line-height: 1.35; }
+
+    /* —— Title screen (dashboard HUD) —— */
+    #titleScreen {
+      position: fixed; inset: 0; z-index: 100;
+      display: none; align-items: center; justify-content: center;
+      background: #050508;
+      pointer-events: auto;
+    }
+    #titleScreen.show { display: flex; }
+    body.title-active #wrap { pointer-events: none; }
+    #titleStage {
+      position: relative;
+      width: min(100vw, calc(100vh * 1024 / 1536));
+      height: min(100vh, calc(100vw * 1536 / 1024));
+      max-width: 100%; max-height: 100%;
+      overflow: hidden;
+      background: #0a0a0c;
+    }
+    #titleArt {
+      display: block; width: 100%; height: 100%;
+      object-fit: cover; object-position: center top;
+      pointer-events: none; user-select: none;
+    }
+    #titleMenu {
+      position: absolute;
+      left: 11%;
+      top: 74.5%;
+      width: 78%;
+      height: 19.5%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1.15fr 1fr 1fr 1fr;
+      gap: clamp(3px, 0.7vh, 8px) clamp(6px, 1.4vw, 12px);
+      padding: clamp(2px, 0.4vh, 6px) clamp(4px, 0.8vw, 10px);
+      box-sizing: border-box;
+      z-index: 2;
+    }
+    #titleMenu::before {
+      content: "";
+      position: absolute; inset: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(
+          0deg,
+          transparent 0,
+          transparent 2px,
+          rgba(0,0,0,.12) 2px,
+          rgba(0,0,0,.12) 3px
+        );
+      opacity: 0.35;
+      border-radius: 4px;
+      mix-blend-mode: multiply;
+    }
+    #titleMenu .title-btn {
+      position: relative;
+      appearance: none; border: 0; border-radius: 4px;
+      background: transparent;
+      color: #ff9a2a;
+      font-family: "Share Tech Mono", ui-monospace, "Courier New", monospace;
+      font-size: clamp(11px, 2.4vw, 18px);
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-shadow:
+        0 0 4px rgba(255, 154, 42, 0.85),
+        0 0 12px rgba(255, 106, 0, 0.55),
+        0 0 22px rgba(255, 106, 0, 0.35),
+        0 1px 2px rgba(0,0,0,.9);
+      min-height: 0;
+      padding: 0 4px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      animation: titleInterfere 2.8s ease-in-out infinite;
+      filter: brightness(0.92);
+      z-index: 1;
+    }
+    #titleMenu .title-btn.primary {
+      grid-column: 1 / -1;
+      font-size: clamp(13px, 2.9vw, 22px);
+      letter-spacing: 0.16em;
+      color: #ffb24a;
+      animation-duration: 2.4s;
+    }
+    #titleMenu .title-btn:nth-child(2) { animation-delay: 0.15s; }
+    #titleMenu .title-btn:nth-child(3) { animation-delay: 0.35s; }
+    #titleMenu .title-btn:nth-child(4) { animation-delay: 0.55s; }
+    #titleMenu .title-btn:nth-child(5) { animation-delay: 0.75s; }
+    #titleMenu .title-btn:nth-child(6) { animation-delay: 0.95s; }
+    #titleMenu .title-btn:nth-child(7) { animation-delay: 1.15s; }
+    #titleMenu .title-btn:hover,
+    #titleMenu .title-btn:focus-visible {
+      outline: none;
+      color: #ffe0a0;
+      filter: brightness(1.25);
+      text-shadow:
+        0 0 6px rgba(255, 200, 80, 0.95),
+        0 0 16px rgba(255, 140, 20, 0.75),
+        0 0 28px rgba(255, 100, 0, 0.45),
+        0 1px 2px rgba(0,0,0,.9);
+    }
+    #titleMenu .title-btn:active { transform: scale(0.98); filter: brightness(1.35); }
+    @keyframes titleInterfere {
+      0%, 100% { opacity: 0.88; transform: translateX(0) skewX(0deg); filter: brightness(0.9); }
+      8% { opacity: 0.96; }
+      12% { opacity: 0.72; transform: translateX(0.4px) skewX(-0.4deg); filter: brightness(1.05); }
+      14% { opacity: 0.94; transform: translateX(-0.6px) skewX(0.55deg); }
+      16% { opacity: 0.86; transform: translateX(0) skewX(0deg); }
+      42% { opacity: 0.91; filter: brightness(0.95); }
+      58% { opacity: 0.78; filter: brightness(1.12); }
+      61% { opacity: 0.98; transform: translateX(0.5px); }
+      63% { opacity: 0.7; transform: translateX(-0.8px) skewX(0.7deg); filter: brightness(0.85); }
+      66% { opacity: 0.92; transform: none; filter: brightness(1); }
+      85% { opacity: 0.86; }
+    }
+    .title-panel {
+      position: absolute; inset: 0; z-index: 5;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(4, 6, 10, 0.78);
+      padding: 8%;
+      box-sizing: border-box;
+    }
+    .title-panel.show { display: flex; }
+    .title-panel-inner {
+      width: min(420px, 100%);
+      max-height: 70%;
+      overflow: auto;
+      padding: 22px 20px 18px;
+      border: 1px solid rgba(255, 150, 40, 0.45);
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(12,14,18,0.96), rgba(8,10,12,0.98));
+      box-shadow: 0 0 24px rgba(255, 120, 20, 0.15), 0 12px 40px rgba(0,0,0,.55);
+      font-family: "Share Tech Mono", ui-monospace, "Courier New", monospace;
+      color: #ffb060;
+    }
+    .title-panel-inner h2 {
+      font-size: clamp(16px, 3.5vw, 22px);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #ff9a2a;
+      text-shadow: 0 0 10px rgba(255,140,20,.55);
+      margin-bottom: 10px;
+    }
+    .title-panel-inner p {
+      font-size: clamp(12px, 2.6vw, 15px);
+      line-height: 1.45;
+      color: #e8d0a8;
+      opacity: 0.92;
+      margin-bottom: 10px;
+      letter-spacing: 0.04em;
+    }
+    .title-panel-inner .title-back {
+      width: 100%; margin-top: 8px;
+      appearance: none; border: 1px solid rgba(255,150,40,.65);
+      border-radius: 6px;
+      background: rgba(30, 22, 12, 0.9);
+      color: #ffb040;
+      font-family: inherit;
+      font-size: 14px; font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 12px 14px; min-height: 44px;
+      text-shadow: 0 0 8px rgba(255,140,20,.4);
+    }
+    .title-panel-inner label.opt {
+      display: flex; align-items: center; gap: 10px;
+      margin: 8px 0; font-size: 13px; letter-spacing: 0.06em;
+      color: #ffc070; cursor: pointer;
+    }
+    .title-panel-inner input[type="checkbox"] { width: 18px; height: 18px; accent-color: #ff6a00; }
+    #titleHint {
+      position: absolute;
+      left: 50%; bottom: 3.5%;
+      transform: translateX(-50%);
+      z-index: 6;
+      pointer-events: none;
+      opacity: 0; transition: opacity .25s ease;
+      font-family: "Share Tech Mono", ui-monospace, "Courier New", monospace;
+      font-size: clamp(11px, 2.4vw, 14px);
+      letter-spacing: 0.08em;
+      color: #ffd080;
+      text-shadow: 0 0 8px rgba(255,140,20,.6), 0 1px 3px #000;
+      text-align: center;
+      padding: 6px 12px;
+      background: rgba(0,0,0,.45);
+      border-radius: 4px;
+      max-width: 90%;
+    }
+    #titleHint.show { opacity: 1; }
   </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet" />
 </head>
-<body>
+<body class="title-active">
   <div id="wrap">
     <div id="hud">
       <h1>Mech Arkanoid</h1>
@@ -498,6 +690,7 @@
                 <span class="btn-label">Cargar</span>
               </button>
             </div>
+            <button type="button" class="nav-secondary" id="btnPauseMenu">Menú</button>
             <button type="button" class="nav-primary" id="btnClosePause">Cerrar</button>
           </div>
         </div>
@@ -533,6 +726,47 @@
     <div id="introTap" class="show">Toca para ver el intro</div>
     <button type="button" id="introSkip">skip</button>
   </div>
-  <script src="game.js?v=89"></script>
+
+  <div id="titleScreen" class="show" aria-hidden="false">
+    <div id="titleStage">
+      <img id="titleArt" src="title-screen.webp" alt="Mecharoid Operation 9" width="1024" height="1536" />
+      <nav id="titleMenu" aria-label="Menú principal">
+        <button type="button" class="title-btn primary" data-title="new">Nueva partida</button>
+        <button type="button" class="title-btn" data-title="load">Cargar</button>
+        <button type="button" class="title-btn" data-title="gallery">Galería</button>
+        <button type="button" class="title-btn" data-title="shop">Tienda</button>
+        <button type="button" class="title-btn" data-title="pack">Mochila</button>
+        <button type="button" class="title-btn" data-title="options">Opciones</button>
+        <button type="button" class="title-btn" data-title="credits">Créditos</button>
+      </nav>
+      <div id="titleHint" aria-live="polite"></div>
+      <div id="titleGallery" class="title-panel" aria-hidden="true">
+        <div class="title-panel-inner">
+          <h2>Galería</h2>
+          <p>Próximamente: mechs, skins, cinemáticas</p>
+          <button type="button" class="title-back" data-title-back>Volver</button>
+        </div>
+      </div>
+      <div id="titleOptions" class="title-panel" aria-hidden="true">
+        <div class="title-panel-inner">
+          <h2>Opciones</h2>
+          <label class="opt"><input type="checkbox" id="optSoundStub" checked /> Sonido (próximamente)</label>
+          <label class="opt"><input type="checkbox" id="optSkipIntroStub" /> Saltar intros (próximamente)</label>
+          <p style="opacity:.65;font-size:12px;margin-top:8px">Ajustes definitivos próximamente</p>
+          <button type="button" class="title-back" data-title-back>Volver</button>
+        </div>
+      </div>
+      <div id="titleCredits" class="title-panel" aria-hidden="true">
+        <div class="title-panel-inner">
+          <h2>Créditos</h2>
+          <p><strong>Mech Bricks</strong><br/>Mecharoid Operation 9</p>
+          <p>Diseño y código: Carlo</p>
+          <p>Asistencia: Arka</p>
+          <button type="button" class="title-back" data-title-back>Volver</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="game.js?v=90"></script>
 </body>
 </html>

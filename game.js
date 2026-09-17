@@ -105,6 +105,32 @@
     } catch (_) {}
   })();
 
+  // Title screen: skip with ?notitle=1 or explicit test shortcuts
+  let skipTitleBoot = false;
+  (function detectSkipTitle() {
+    try {
+      const q = new URLSearchParams(location.search);
+      try {
+        const h = (location.hash || '').replace(/^#/, '');
+        if (h) {
+          const hq = new URLSearchParams(h.includes('=') ? h : '');
+          for (const [k, v] of hq.entries()) {
+            if (!q.has(k)) q.set(k, v);
+          }
+        }
+      } catch (_) {}
+      const truthy = (v) => {
+        if (v == null) return false;
+        const s = String(v).trim().toLowerCase();
+        return s === '' || s === '1' || s === 'true' || s === 'yes' || s === 'on';
+      };
+      if (q.has('notitle') && truthy(q.get('notitle'))) { skipTitleBoot = true; return; }
+      if (q.has('level') || q.has('n')) { skipTitleBoot = true; return; }
+      if (q.has('phase') || q.has('skip')) { skipTitleBoot = true; return; }
+      if (q.has('money') || q.has('m') || q.has('cash') || q.has('dinero')) { skipTitleBoot = true; return; }
+    } catch (_) {}
+  })();
+
   let bootMoneyApplied = false;
   function applyBootMoney(showHint) {
     if (bootMoney == null) return false;
@@ -8261,9 +8287,8 @@
         resetBtn.click();
       } else if (act === 'menu') {
         hideSoftFail();
-        paused = true;
-        refreshPauseMeta();
-        setOverlay(pauseOverlay, true);
+        try { closeAllMenus(); } catch (_) {}
+        showTitleScreen();
       }
     });
   })();
@@ -8439,6 +8464,200 @@
   }
 
 
+
+  // —— Title screen ——
+  let titleActive = false;
+  let menuReturnToTitle = false;
+
+  function titleEl() { return document.getElementById('titleScreen'); }
+
+  function hideTitleSubpanels() {
+    ['titleGallery', 'titleOptions', 'titleCredits'].forEach((id) => {
+      const p = document.getElementById(id);
+      if (!p) return;
+      p.classList.remove('show');
+      p.setAttribute('aria-hidden', 'true');
+    });
+  }
+
+  function showTitleHint(msg, ms) {
+    const el = document.getElementById('titleHint');
+    if (!el) {
+      try { showMenuHint(msg, '', ms); } catch (_) {}
+      return;
+    }
+    el.textContent = msg || '';
+    el.classList.add('show');
+    clearTimeout(window.__titleHintHide);
+    window.__titleHintHide = setTimeout(() => el.classList.remove('show'), ms || 2200);
+  }
+
+  function showTitleScreen() {
+    titleActive = true;
+    paused = true;
+    menuReturnToTitle = false;
+    document.body.classList.add('title-active');
+    hideTitleSubpanels();
+    try {
+      setOverlay(pauseOverlay, false);
+      setOverlay(shopOverlay, false);
+      setOverlay(packOverlay, false);
+    } catch (_) {}
+    try { hideSoftFail(); } catch (_) {}
+    try {
+      setPauseBtn(false); setShopBtn(false); setPackBtn(false);
+    } catch (_) {}
+    const el = titleEl();
+    if (el) {
+      el.classList.add('show');
+      el.setAttribute('aria-hidden', 'false');
+    }
+    const hintEl = document.getElementById('hint');
+    if (hintEl) hintEl.classList.remove('show');
+  }
+
+  function hideTitleScreen() {
+    titleActive = false;
+    document.body.classList.remove('title-active');
+    hideTitleSubpanels();
+    const el = titleEl();
+    if (el) {
+      el.classList.remove('show');
+      el.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function resetCampaignToLevel1() {
+    window.__gotoNext = false;
+    levelIndex = 0;
+    score = 0;
+    try { persistScore(); } catch (_) {}
+    backpack = [];
+    // mid-run cleanup (mirrors reset button)
+    gameOver = false;
+    won = false;
+    softFailVisible = false;
+    outro = null;
+    outroT = 0;
+    window.__outroDust = false;
+    l6Transit = false;
+    l6CamFX = null;
+    particles = [];
+    bombs = [];
+    playerBomb = null;
+    playerBombArmed = false;
+    try { setBombButton(false); } catch (_) {}
+    l8BootSkipToHead = false;
+    l8BootSkipToTorso = false;
+    launched = false;
+    try { syncLevelUrl(); } catch (_) {}
+  }
+
+  async function startNewGameFromTitle() {
+    hideTitleScreen();
+    menuReturnToTitle = false;
+    resetCampaignToLevel1();
+    // Close overlays without unpausing (closeAllMenus sets paused=false)
+    try {
+      setOverlay(pauseOverlay, false);
+      setOverlay(shopOverlay, false);
+      setOverlay(packOverlay, false);
+      setPauseBtn(false); setShopBtn(false); setPackBtn(false);
+    } catch (_) {}
+    paused = true;
+    loading.classList.remove('hide');
+    loading.textContent = 'Cargando Nivel 1…';
+    hint.classList.remove('show');
+    try {
+      const assetsP = Promise.all([loadImage(), loadBg()]);
+      if (shouldPlayLevelIntro()) {
+        loading.classList.add('hide');
+        await playLevelIntro(level().id);
+      }
+      await assetsP;
+      try { await Promise.all([loadPaddle(), loadBombArts(), loadBallSkin()]); } catch (_) {}
+      buildLevel();
+      applyBootMoney(false);
+      updateHud();
+      loading.classList.add('hide');
+      paused = false;
+    } catch (err) {
+      paused = false;
+      loading.textContent = 'No pude iniciar la partida.';
+      console.error(err);
+    }
+  }
+
+  async function loadFromTitle() {
+    let has = false;
+    try {
+      has = !!localStorage.getItem(SAVE_KEY);
+    } catch (_) { has = false; }
+    if (!has) {
+      showTitleHint('No hay partida guardada', 2200);
+      return;
+    }
+    hideTitleScreen();
+    menuReturnToTitle = false;
+    try {
+      await loadGameProgress();
+    } catch (err) {
+      console.warn('load from title', err);
+      showTitleScreen();
+    }
+  }
+
+  function openTitleSubpanel(id) {
+    hideTitleSubpanels();
+    const p = document.getElementById(id);
+    if (!p) return;
+    p.classList.add('show');
+    p.setAttribute('aria-hidden', 'false');
+  }
+
+  function wireTitleScreen() {
+    const root = titleEl();
+    if (!root || root.__wired) return;
+    root.__wired = true;
+    root.addEventListener('click', (e) => {
+      const back = e.target.closest('[data-title-back]');
+      if (back) {
+        e.stopPropagation();
+        hideTitleSubpanels();
+        return;
+      }
+      const btn = e.target.closest('[data-title]');
+      if (!btn) return;
+      e.stopPropagation();
+      const act = btn.getAttribute('data-title');
+      if (act === 'new') {
+        Promise.resolve(startNewGameFromTitle()).catch((err) => console.warn(err));
+      } else if (act === 'load') {
+        Promise.resolve(loadFromTitle()).catch((err) => console.warn(err));
+      } else if (act === 'gallery') {
+        openTitleSubpanel('titleGallery');
+      } else if (act === 'shop') {
+        menuReturnToTitle = true;
+        hideTitleScreen();
+        titleActive = false;
+        openShop();
+        try { setShopBtn(true); } catch (_) {}
+        // keep flag: we hid title but want return
+        menuReturnToTitle = true;
+      } else if (act === 'pack') {
+        menuReturnToTitle = true;
+        hideTitleScreen();
+        openPack();
+        try { setPackBtn(true); setShopBtn(false); } catch (_) {}
+        menuReturnToTitle = true;
+      } else if (act === 'options') {
+        openTitleSubpanel('titleOptions');
+      } else if (act === 'credits') {
+        openTitleSubpanel('titleCredits');
+      }
+    });
+  }
+
   // —— Pausa / Tienda / Mochila ——
   const pauseOverlay = document.getElementById('pauseOverlay');
   const shopOverlay = document.getElementById('shopOverlay');
@@ -8454,6 +8673,7 @@
   }
 
   function openPause() {
+    if (titleActive) return;
     if (gameOver || outro === 'slowmo' || l6Transit) return;
     paused = true;
     refreshPauseMeta(); setOverlay(pauseOverlay, true);
@@ -8888,7 +9108,8 @@
     try {
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) {
-        showMenuHint('No hay partida guardada', 'Progreso: nivel, dinero, vidas, mochila', 2200);
+        if (titleActive) showTitleHint('No hay partida guardada', 2200);
+        else showMenuHint('No hay partida guardada', 'Progreso: nivel, dinero, vidas, mochila', 2200);
         return;
       }
       data = JSON.parse(raw);
@@ -8986,6 +9207,15 @@
       e.stopPropagation(); closeAllMenus(); setPauseBtn(false); setShopBtn(false);
     });
   }
+  const btnPauseMenu = document.getElementById('btnPauseMenu');
+  if (btnPauseMenu) {
+    btnPauseMenu.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try { closeAllMenus(); } catch (_) {}
+      setPauseBtn(false);
+      showTitleScreen();
+    });
+  }
   const btnShop = document.getElementById('btnShop');
   btnShop.addEventListener('pointerdown', () => setShopBtn(true));
   btnShop.addEventListener('pointerup', () => { /* keep on while shop open */ });
@@ -8994,10 +9224,26 @@
   btnPack.addEventListener('pointerdown', () => setPackBtn(true));
   btnPack.addEventListener('click', (e) => { e.stopPropagation(); openPack(); setShopBtn(false); setPackBtn(true); });
   document.getElementById('btnShopBack').addEventListener('click', (e) => {
-    e.stopPropagation(); openPause(); setShopBtn(false); setPackBtn(false);
+    e.stopPropagation();
+    if (menuReturnToTitle) {
+      menuReturnToTitle = false;
+      setOverlay(shopOverlay, false);
+      setShopBtn(false); setPackBtn(false);
+      showTitleScreen();
+    } else {
+      openPause(); setShopBtn(false); setPackBtn(false);
+    }
   });
   document.getElementById('btnPackBack').addEventListener('click', (e) => {
-    e.stopPropagation(); openPause(); setPackBtn(false);
+    e.stopPropagation();
+    if (menuReturnToTitle) {
+      menuReturnToTitle = false;
+      setOverlay(packOverlay, false);
+      setPackBtn(false);
+      showTitleScreen();
+    } else {
+      openPause(); setPackBtn(false);
+    }
   });
 
   const btnSave = document.getElementById('btnSave');
@@ -9279,10 +9525,28 @@
   function shouldPlayCampaignIntro() { return shouldPlayLevelIntro(); }
   function playCampaignIntro() { return playLevelIntro(level().id); }
 
+  wireTitleScreen();
+
   (async function init() {
     try {
-      const wantIntro = shouldPlayLevelIntro();
       const assetsP = Promise.all([loadImage(), loadPaddle(), loadBg(), loadBombArts(), loadBallSkin()]);
+      if (skipTitleBoot) {
+        hideTitleScreen();
+        document.body.classList.remove('title-active');
+      }
+      if (!skipTitleBoot) {
+        // Title first: load assets under the hood, hold gameplay until Nueva partida
+        showTitleScreen();
+        loading.classList.add('hide');
+        await assetsP;
+        // Prebuild level 1 so canvas/draw are valid under the title
+        try { buildLevel(); } catch (e) { console.warn(e); }
+        applyBootMoney(false);
+        paused = true;
+        requestAnimationFrame(frame);
+        return;
+      }
+      const wantIntro = shouldPlayLevelIntro();
       if (wantIntro) {
         loading.classList.add('hide');
         await playLevelIntro(level().id);
