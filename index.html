@@ -510,6 +510,7 @@
     #titleMenu .title-btn:nth-child(5) { animation-delay: 0.75s; }
     #titleMenu .title-btn:nth-child(6) { animation-delay: 0.95s; }
     #titleMenu .title-btn:nth-child(7) { animation-delay: 1.15s; }
+    #titleMenu .title-btn:nth-child(8) { animation-delay: 1.35s; }
     #titleMenu .title-btn:hover,
     #titleMenu .title-btn:focus-visible {
       outline: none;
@@ -609,6 +610,96 @@
       max-width: 90%;
     }
     #titleHint.show { opacity: 1; }
+
+    /* —— Terreno / Estate —— */
+    #estateOverlay {
+      position: fixed; inset: 0; z-index: 80;
+      display: none; flex-direction: column;
+      background: #12161e;
+      color: #f2f2f2;
+    }
+    #estateOverlay.show { display: flex; }
+    body.estate-active #wrap { pointer-events: none; }
+    #estateTop {
+      flex: 0 0 auto;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px;
+      padding-top: max(10px, env(safe-area-inset-top));
+      background: rgba(0,0,0,.78);
+      border-bottom: 1px solid rgba(255,140,40,.35);
+    }
+    #estateTop h2 {
+      font-size: 16px; font-weight: 700; margin-right: auto;
+      letter-spacing: 0.04em;
+    }
+    #estateMoney {
+      font-variant-numeric: tabular-nums;
+      font-weight: 700; color: #ffd080;
+      margin-right: 6px;
+    }
+    #estateBack {
+      background: #3a3a42; min-height: 36px; padding: 8px 12px; font-size: 13px;
+    }
+    #estateStage {
+      flex: 1 1 auto; position: relative; min-height: 0;
+      display: flex; flex-direction: column;
+    }
+    #estateCanvas {
+      flex: 1 1 auto; width: 100%; min-height: 0;
+      display: block; touch-action: none;
+      background: #1a2433;
+    }
+    #estateBuyPanel {
+      position: absolute; inset: 0;
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 14px; padding: 24px;
+      background: rgba(8,10,16,.72);
+      z-index: 2;
+    }
+    #estateBuyPanel p { text-align: center; max-width: 280px; opacity: .9; line-height: 1.4; }
+    #estateBuyBtn {
+      background: linear-gradient(180deg, #ff8a20, #e85d04);
+      min-width: 220px; font-size: 15px;
+      box-shadow: 0 0 18px rgba(255,120,20,.35);
+    }
+    #estateTray {
+      flex: 0 0 auto;
+      display: none; gap: 8px; overflow-x: auto;
+      padding: 10px 12px;
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+      background: rgba(0,0,0,.82);
+      border-top: 1px solid rgba(255,140,40,.25);
+      -webkit-overflow-scrolling: touch;
+    }
+    .estate-tray-item {
+      flex: 0 0 auto;
+      display: flex; align-items: center; gap: 8px;
+      min-width: 118px; min-height: 48px;
+      padding: 8px 10px;
+      background: #2a2a32; color: #eee;
+      border: 1px solid transparent;
+      border-radius: 10px; font-size: 12px; text-align: left;
+      line-height: 1.25;
+    }
+    .estate-tray-item .swatch {
+      width: 22px; height: 22px; border-radius: 5px;
+      border: 1px solid rgba(255,255,255,.25); flex: 0 0 auto;
+    }
+    .estate-tray-item small { opacity: .75; font-weight: 500; }
+    .estate-tray-item.active {
+      border-color: #ff8a20;
+      box-shadow: 0 0 0 1px rgba(255,138,32,.45);
+      background: #3a2a18;
+    }
+    .estate-tray-item.trash.active { border-color: #ff5555; background: #3a1818; }
+    #estateStatus {
+      position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%);
+      z-index: 3; pointer-events: none;
+      font-size: 12px; color: #ffd080;
+      background: rgba(0,0,0,.5); padding: 4px 10px; border-radius: 6px;
+      max-width: 90%; text-align: center;
+    }
   </style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -736,6 +827,7 @@
         <button type="button" class="title-btn" data-title="gallery">Galería</button>
         <button type="button" class="title-btn" data-title="shop">Tienda</button>
         <button type="button" class="title-btn" data-title="pack">Mochila</button>
+        <button type="button" class="title-btn" data-title="estate">Terreno</button>
         <button type="button" class="title-btn" data-title="options">Opciones</button>
         <button type="button" class="title-btn" data-title="credits">Créditos</button>
       </nav>
@@ -767,6 +859,24 @@
       </div>
     </div>
   </div>
-  <script src="game.js?v=92"></script>
+
+  <div id="estateOverlay" aria-hidden="true">
+    <div id="estateTop">
+      <h2>Terreno</h2>
+      <span id="estateMoney">$0</span>
+      <button type="button" id="estateBack" class="secondary">Volver</button>
+    </div>
+    <div id="estateStage">
+      <canvas id="estateCanvas" width="800" height="600"></canvas>
+      <div id="estateBuyPanel">
+        <p>Compra un lote vacío y construye con marcadores (arte definitivo después).</p>
+        <button type="button" id="estateBuyBtn">Comprar terreno $5000</button>
+      </div>
+      <div id="estateStatus" aria-live="polite"></div>
+      <div id="estateTray" aria-label="Catalogo de terreno"></div>
+    </div>
+  </div>
+  <script src="game.js?v=93"></script>
+  <script src="estate.js?v=2"></script>
 </body>
 </html>

@@ -186,10 +186,30 @@
   let ballStallT = 0;
   let ballLastAng = -Math.PI / 2;
   let score = 0, lives = START_LIVES, aliveCount = 0;
+  let dualArmorHintShown = false;
   const SCORE_KEY = 'mechBricksScore_v1';
   function persistScore() {
     try { localStorage.setItem(SCORE_KEY, String(score | 0)); } catch (_) {}
   }
+  function getMecharoidScore() { return score | 0; }
+  function setMecharoidScore(v) {
+    score = Math.max(0, v | 0);
+    persistScore();
+    try { updateHud(); } catch (_) {}
+    return score;
+  }
+  function addMecharoidScore(delta) {
+    return setMecharoidScore((score | 0) + (delta | 0));
+  }
+  window.getMecharoidScore = getMecharoidScore;
+  window.setMecharoidScore = setMecharoidScore;
+  window.addMecharoidScore = addMecharoidScore;
+  window.persistMecharoidScore = persistScore;
+  Object.defineProperty(window, '__mecharoidScore', {
+    configurable: true,
+    get() { return score | 0; },
+    set(v) { setMecharoidScore(v); },
+  });
   function restorePersistedScore() {
     // Legacy helper — no auto-restore on boot (juego nuevo a $0).
     // Solo ?money= / applyBootMoney fija el saldo al iniciar.
@@ -1116,7 +1136,7 @@
 
     function brickCollidable(br) {
       if (!br || !br.alive || br.falling || br.settled) return false;
-      if (level().dualLayer && br.layer === 'lower' && typeof isLowerCoveredByUpper === 'function' && isLowerCoveredByUpper(br)) {
+      if (isLowerBlocked(br)) {
         return false;
       }
       return true;
@@ -1622,10 +1642,13 @@
     let detached = 0;
     // Cara L8: no animar miles de caídas (congela al pasar a torso) — se esfuman
     const l8HeadPop = level().queenBoss && (l8Phase === 'head' || (l8Phase === 'torso' && l8TorsoStage === 'armor'));
+    const lowerLocked = level().dualLayer && dualUpperStillUp();
     for (let i = 0; i < n; i++) {
       const br = bricks[i];
       if (!br.alive || br.falling || br.settled) continue;
       if (supported[i]) continue;
+      // L7: lower core stays solid until upper shield is fully gone
+      if (lowerLocked && br.layer === 'lower') continue;
       clearBrickGrid(br, i);
       if (l8HeadPop) {
         br.alive = false;
@@ -1686,7 +1709,8 @@
     };
     if (level().dualLayer) {
       const ds = window.__dualStart || {};
-      collapseLayer('lower', ds.lower || 0);
+      // Never collapse lower while any upper remains
+      if (!dualUpperStillUp()) collapseLayer('lower', ds.lower || 0);
       collapseLayer('upper', ds.upper || 0);
     } else if (localCount > 0 && structureStartCount > 0) {
       const collapseAt = isL8ArmorRest() ? 0.256 : 0.50; // resto: -20%×3 dureza
@@ -1715,8 +1739,25 @@
         if (launched && !gameOver && !paused) hint.classList.remove('show');
       }, 1400);
     }
+    maybeDualArmorBrokenHint();
     updateHud();
     maybeWin();
+  }
+
+  function maybeDualArmorBrokenHint() {
+    if (!level().dualLayer || dualArmorHintShown) return;
+    const ds = window.__dualStart;
+    if (!ds || !(ds.upper > 0)) return;
+    if (dualUpperStillUp()) return;
+    dualArmorHintShown = true;
+    try {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>¡Blindaje roto!</strong><span>Ahora el núcleo…</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => {
+        if (launched && !gameOver && !paused) hint.classList.remove('show');
+      }, 2200);
+    } catch (_) {}
   }
 
   function countFalling() {
@@ -4963,8 +5004,10 @@
         else if (br.layer === 'upper') up++;
       }
       window.__dualStart = { lower: lo, upper: up };
+      dualArmorHintShown = false;
     } else {
       window.__dualStart = null;
+      dualArmorHintShown = false;
     }
     particles = [];
     bombs = [];
@@ -5171,7 +5214,7 @@
     const fling = (list) => {
       for (const br of list) {
         if (!br.alive || br.settled) continue;
-        if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+        if (isLowerBlocked(br)) continue;
         const cx = br.x + br.w / 2;
         const cy = br.y + br.h / 2;
         const dx = cx - x;
@@ -6175,7 +6218,7 @@
     const hitList = [];
     for (const br of bricks) {
       if (!br.alive || br.settled) continue;
-      if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+      if (isLowerBlocked(br)) continue;
       const cx = br.x + br.w / 2;
       const cy = br.y + br.h / 2;
       const d2 = (cx - x) * (cx - x) + (cy - y) * (cy - y);
@@ -6315,6 +6358,26 @@
     return false;
   }
 
+  /** True while ANY upper-layer brick still stands (L7 dual-layer shield). */
+  function dualUpperStillUp() {
+    if (!level().dualLayer) return false;
+    for (let i = 0; i < bricks.length; i++) {
+      const br = bricks[i];
+      if (br.layer === 'upper' && br.alive && !br.falling && !br.settled) return true;
+    }
+    return false;
+  }
+
+  /** Global lock: lower layer ignores ball/bomb until all upper is gone. */
+  function isLowerLayerLocked(br) {
+    if (!br || br.layer !== 'lower' || !level().dualLayer) return false;
+    return dualUpperStillUp();
+  }
+
+  function isLowerBlocked(br) {
+    return !!(br && br.layer === 'lower' && (isLowerLayerLocked(br) || isLowerCoveredByUpper(br)));
+  }
+
   function collideBricksWithBallOnCurrent() {
     let hit = null;
     let bounceX = false;
@@ -6324,7 +6387,7 @@
       for (let i = 0; i < bricks.length; i++) {
         const br = bricks[i];
         if (!br.alive || br.falling || br.settled) continue;
-        if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+        if (isLowerBlocked(br)) continue;
         if (!collideCircleAABB(ball.x, ball.y, ball.r, br)) continue;
         if (hit && hit.layer === 'upper' && br.layer === 'lower') continue;
         hit = br;
@@ -6362,7 +6425,7 @@
           const br = bricks[id];
           if (!br.alive || br.falling || br.settled) continue;
           if (!collideCircleAABB(ball.x, ball.y, ball.r, br)) continue;
-          if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+          if (isLowerBlocked(br)) continue;
 
           // Prefer upper-layer hits when both could register
           if (hit && hit.layer === 'upper' && br.layer === 'lower') continue;
@@ -6439,7 +6502,7 @@
             for (let i = 0; i < bricks.length; i++) {
               const br = bricks[i];
               if (!br.alive || br.falling || br.settled) continue;
-              if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+              if (isLowerBlocked(br)) continue;
               if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
             }
             return false;
@@ -6469,7 +6532,7 @@
                 if (id < 0) continue;
                 const br = bricks[id];
                 if (!br.alive || br.falling || br.settled) continue;
-                if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+                if (isLowerBlocked(br)) continue;
                 if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
               }
             }
@@ -7720,7 +7783,7 @@
         for (let i = 0; i < bricks.length; i++) {
           const br = bricks[i];
           if (!br.alive || br.falling || br.settled) continue;
-          if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+          if (isLowerBlocked(br)) continue;
           if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
         }
         return false;
@@ -7750,7 +7813,7 @@
             if (id < 0) continue;
             const br = bricks[id];
             if (!br.alive || br.falling || br.settled) continue;
-            if (br.layer === 'lower' && isLowerCoveredByUpper(br)) continue;
+            if (isLowerBlocked(br)) continue;
             if (collideCircleAABB(b.x, b.y, b.r, br)) return true;
           }
         }
@@ -8729,9 +8792,28 @@
         openTitleSubpanel('titleOptions');
       } else if (act === 'credits') {
         openTitleSubpanel('titleCredits');
+      } else if (act === 'estate') {
+        if (typeof window.openMecharoidEstate === 'function') {
+          window.openMecharoidEstate();
+        } else {
+          showTitleHint('Terreno no disponible', 2000);
+        }
       }
     });
   }
+
+  // Bridge for estate mini-game: pause main loop while overlay open
+  window.__mecharoidSetPaused = function (on) {
+    paused = !!on;
+  };
+  window.__mecharoidIsTitleActive = function () { return !!titleActive; };
+  window.__mecharoidHideTitle = function () {
+    try { hideTitleScreen(); } catch (_) {}
+    titleActive = false;
+  };
+  window.__mecharoidShowTitle = function () {
+    try { showTitleScreen(); } catch (_) {}
+  };
 
   // —— Pausa / Tienda / Mochila ——
   const pauseOverlay = document.getElementById('pauseOverlay');
@@ -8960,7 +9042,7 @@
     const r2 = radius * radius;
     const consider = (br) => {
       if (!br || !br.alive || br.falling || br.settled) return;
-      if (br.layer === 'lower' && typeof isLowerCoveredByUpper === 'function' && isLowerCoveredByUpper(br)) return;
+      if (isLowerBlocked(br)) return;
       const cx = br.x + br.w * 0.5;
       const cy = br.y + br.h * 0.5;
       const dx = cx - x;
@@ -9037,7 +9119,7 @@
     const r = bolt.r;
     const hitTest = (br) => {
       if (!br.alive || br.falling || br.settled) return false;
-      if (br.layer === 'lower' && typeof isLowerCoveredByUpper === 'function' && isLowerCoveredByUpper(br)) return false;
+      if (isLowerBlocked(br)) return false;
       if (bolt.x + r < br.x || bolt.x - r > br.x + br.w) return false;
       if (bolt.y + r < br.y || bolt.y - r > br.y + br.h) return false;
       return true;
