@@ -108,7 +108,7 @@
       top: max(8px, env(safe-area-inset-top));
       left: 50%;
       transform: translateX(-50%);
-      z-index: 6;
+      z-index: 30;
       display: none;
       pointer-events: auto;
       background: transparent !important;
@@ -253,6 +253,7 @@
     #laserCd .laser-cd-inner {
       width: min(260px, 70vw);
       margin: 0 auto;
+      pointer-events: none;
     }
     #laserCd.show { display: block; }
     #laserCd .laser-cd-label {
@@ -262,6 +263,7 @@
       color: #9ad8ff;
       margin-bottom: 4px;
       text-shadow: 0 1px 3px rgba(0,0,0,.85);
+      pointer-events: none;
     }
     #laserCd .laser-cd-track {
       height: 7px;
@@ -269,6 +271,7 @@
       background: rgba(20, 28, 40, 0.72);
       border: 1px solid rgba(120, 200, 255, 0.35);
       overflow: hidden;
+      pointer-events: none;
     }
     #laserCdFill {
       height: 100%;
@@ -277,6 +280,7 @@
       background: linear-gradient(90deg, #1e90ff, #5cf0ff 55%, #e8ffff);
       box-shadow: 0 0 10px rgba(80, 220, 255, 0.65);
       transition: width 0.08s linear;
+      pointer-events: none;
     }
     #laserCd.firing .laser-cd-label { color: #dffcff; }
     #laserCd.firing #laserCdFill {
@@ -302,14 +306,17 @@
     #phaseBar .phase-label {
       font-size: 9px; font-weight: 650; color: #ffd08a; margin-bottom: 1px;
       text-shadow: 0 1px 2px rgba(0,0,0,.85);
+      pointer-events: none;
     }
     #phaseBar .phase-track {
       height: 4px; border-radius: 999px; background: rgba(0,0,0,.45);
       border: 1px solid rgba(255,180,80,.35); overflow: hidden;
+      pointer-events: none;
     }
     #phaseBar .phase-fill {
       height: 100%; width: 100%; background: linear-gradient(90deg,#e85d04,#ffd06a);
       border-radius: inherit; transition: width .15s linear;
+      pointer-events: none;
     }
     #introOverlay {
       display: none; position: fixed; inset: 0; z-index: 80;
@@ -876,7 +883,7 @@
       <div id="estateTray" aria-label="Catalogo de terreno"></div>
     </div>
   </div>
-  <script src="game.js?v=95"></script>
+  <script src="game.js?v=96"></script>
   <script src="estate.js?v=2"></script>
 </body>
 </html>

@@ -7843,7 +7843,10 @@
 
     // L8 ghost (manos/cabeza/torso): solo vuela y detona por tiempo/altura — CERO hit-test de ladrillos
     if (b.l8Ghost) {
-      if (b.t >= 0.55 || b.y < H * 0.36) {
+      // Min flight before height detonate so bomb is visible; hands detonate a bit later
+      const detonateT = (l8Phase === 'hands') ? 0.7 : 0.6;
+      const heightOk = b.t >= 0.28 && b.y < H * 0.36;
+      if (b.t >= detonateT || heightOk) {
         const bx = b.x, by = b.y;
         const R = (typeof EXPLODE_R === 'number' ? EXPLODE_R : 40) * 2;
         b.alive = false;
@@ -9428,36 +9431,68 @@
 
   function firePlayerBomb() {
     if (!playerBombArmed || gameOver || won || outro || l6Transit) return false;
-    // If a previous bomb is stuck/dead, clear it so the button works again
-    if (playerBomb && (!playerBomb.alive || (Math.abs(playerBomb.vx) + Math.abs(playerBomb.vy) < 0.01 && playerBomb.t > 0.05))) {
-      playerBomb = null;
+    // Clear stuck / expired bombs so the button works again
+    if (playerBomb) {
+      const pb = playerBomb;
+      const spd = Math.abs(pb.vx || 0) + Math.abs(pb.vy || 0);
+      const off =
+        pb.y - (pb.r || 0) > H + 40 ||
+        pb.y + (pb.r || 0) < -40 ||
+        pb.x + (pb.r || 0) < -40 ||
+        pb.x - (pb.r || 0) > W + 40;
+      if (
+        !pb.alive ||
+        off ||
+        (pb.l8Ghost && pb.t > 0.8) ||
+        (spd < 0.01 && pb.t > 0.05)
+      ) {
+        playerBomb = null;
+      }
     }
-    if (playerBomb) return false;
+    if (playerBomb) {
+      hint.classList.add('show');
+      hint.innerHTML = '<strong>💣 Espera la bomba…</strong><span>Aún en vuelo</span>';
+      clearTimeout(window.__hintHide);
+      window.__hintHide = setTimeout(() => {
+        if (!paused && !gameOver) hint.classList.remove('show');
+      }, 900);
+      return false;
+    }
     if (!ball && !paddle) return false;
 
-    let x = ball ? ball.x : (paddle.x + paddle.w / 2);
-    let y = ball ? ball.y : paddle.y;
-    let vx = 0, vy = -4.2;
-    if (launched && ball) {
-      const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
-      if (sp > 0.35) {
-        const ang = Math.atan2(ball.vy, ball.vx);
-        const speed = Math.max(2.2, sp * 0.5);
-        vx = Math.cos(ang) * speed;
-        vy = Math.sin(ang) * speed;
-        // Prefer upward-ish shot if ball is nearly horizontal toward paddle
-        if (vy > -0.6) vy = Math.min(vy, -2.4);
-      } else {
-        vx = (Math.random() - 0.5) * 0.8;
-        vy = -4.2;
-        x = ball.x; y = ball.y;
-      }
-    } else if (paddle) {
-      // Antes de servir: dispara hacia arriba desde la paleta
+    let x, y, vx, vy;
+    if (level().queenBoss && paddle) {
+      // L8 queen: always launch from paddle upward (never inherit ball pos/vel)
       x = paddle.x + paddle.w / 2;
-      y = paddle.y - 10;
-      vx = (Math.random() - 0.5) * 0.6;
-      vy = -4.6;
+      y = paddle.y - 12;
+      vx = (Math.random() - 0.5) * 0.9;
+      vy = -5.4 - Math.random() * 0.6; // ≈ -5 … -6
+    } else {
+      x = ball ? ball.x : (paddle.x + paddle.w / 2);
+      y = ball ? ball.y : paddle.y;
+      vx = 0;
+      vy = -4.2;
+      if (launched && ball) {
+        const sp = Math.hypot(ball.vx, ball.vy) || ball.speed || 4;
+        if (sp > 0.35) {
+          const ang = Math.atan2(ball.vy, ball.vx);
+          const speed = Math.max(2.2, sp * 0.5);
+          vx = Math.cos(ang) * speed;
+          vy = Math.sin(ang) * speed;
+          // Prefer upward-ish shot if ball is nearly horizontal toward paddle
+          if (vy > -0.6) vy = Math.min(vy, -2.4);
+        } else {
+          vx = (Math.random() - 0.5) * 0.8;
+          vy = -4.2;
+          x = ball.x; y = ball.y;
+        }
+      } else if (paddle) {
+        // Antes de servir: dispara hacia arriba desde la paleta
+        x = paddle.x + paddle.w / 2;
+        y = paddle.y - 10;
+        vx = (Math.random() - 0.5) * 0.6;
+        vy = -4.6;
+      }
     }
 
     const l8BossGhost = !!(level().queenBoss && (l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso'));
