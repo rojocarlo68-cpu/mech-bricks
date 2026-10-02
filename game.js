@@ -9288,7 +9288,11 @@
     pointerDragging = true;
     pointerX = p.x;
     pointerY = p.y;
-    if (paddle) {
+    if (isMousePointer(e) && paddle) {
+      // Ratón: la pala sigue al cursor por su centro (igual que el hover)
+      grabOffsetX = paddle.w * 0.5;
+      grabOffsetY = paddle.h * 0.5;
+    } else if (paddle) {
       grabOffsetX = p.x - paddle.x;
       grabOffsetY = p.y - paddle.y;
       // Si tocas lejos de la pala, agarra cerca del centro
@@ -9299,7 +9303,8 @@
       grabOffsetY = 0;
     }
     try {
-      if (e.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+      // Ratón: sin captura (si el cursor sale del canvas la pala se queda quieta)
+      if (!isMousePointer(e) && e.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
     } catch (_) {}
     if (window.__gotoNext) { startNextLevel(); return; }
     if (!launched && !gameOver && !won && !l6Transit && !(level().queenBoss && l8Intro)) {
@@ -9315,8 +9320,34 @@
       applyPaddleFromPointer();
     }
   }
+  /** Ratón de escritorio (no touch / pen / eventos touch*). */
+  function isMousePointer(e) {
+    return !!e && e.pointerType === 'mouse';
+  }
+  function setMouseCursorHidden(hide) {
+    canvas.style.cursor = hide ? 'none' : '';
+  }
   function onMove(e) {
     e.preventDefault();
+    if (isMousePointer(e)) {
+      // Ratón: la pala sigue al cursor sin pulsar botón (solo sobre el canvas y en juego)
+      if (paused || titleActive) {
+        pointerDragging = false;
+        setMouseCursorHidden(false);
+        return;
+      }
+      const mp = pointerPos(e);
+      pointerX = mp.x;
+      pointerY = mp.y;
+      if (paddle) {
+        grabOffsetX = paddle.w * 0.5;
+        grabOffsetY = paddle.h * 0.5;
+      }
+      pointerDragging = true;
+      setMouseCursorHidden(true);
+      applyPaddleFromPointer();
+      return;
+    }
     if (paused) return;
     const p = pointerPos(e);
     pointerX = p.x;
@@ -9329,16 +9360,24 @@
     applyPaddleFromPointer();
   }
   function onUp(e) {
+    // Ratón: seguir al cursor mientras esté sobre el canvas (soltar botón no suelta la pala)
+    if (isMousePointer(e)) return;
     pointerDragging = false;
     try {
       if (e && e.pointerId != null && canvas.releasePointerCapture) canvas.releasePointerCapture(e.pointerId);
     } catch (_) {}
+  }
+  function onMouseLeave(e) {
+    if (!isMousePointer(e)) return;
+    pointerDragging = false;
+    setMouseCursorHidden(false);
   }
 
   canvas.addEventListener('pointerdown', onDown, { passive: false });
   canvas.addEventListener('pointermove', onMove, { passive: false });
   canvas.addEventListener('pointerup', onUp, { passive: false });
   canvas.addEventListener('pointercancel', onUp, { passive: false });
+  canvas.addEventListener('pointerleave', onMouseLeave);
   canvas.addEventListener('touchstart', onDown, { passive: false });
   canvas.addEventListener('touchmove', onMove, { passive: false });
   canvas.addEventListener('touchend', onUp, { passive: false });
