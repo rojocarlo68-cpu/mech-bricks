@@ -19,8 +19,18 @@
     { id: 5, name: 'Nivel 5', mech: 'mech-level5.png', bg: 'bg-level5.jpg', paddleScale: 0.921, groundFrac: 0.90, dodge: true, fly: true, mechScale: 0.92, irregularBricks: true, ballSpeed: 1.02 },
     { id: 6, name: 'Nivel 6', mech: 'mech-level6.png', bg: 'bg-level6.jpg', bgB: 'bg-level6b.jpg', bgC: 'bg-level6c.jpg', waves: 3, paddleScale: 0.8846, groundFrac: 0.88, dodge: true, jump: true, mechScale: 0.45, irregularBricks: true, ballSpeed: 1.0404, brickDamageMult: 1.2 },
     { id: 7, name: 'Nivel 7', mech: 'mech-level7-upper.png', mechLower: 'mech-level7-lower.png', bg: 'bg-level7.jpg', dualLayer: true, irregularBricks: true, mechScale: 1.24, paddleScale: 0.86, groundFrac: 0.88, dodge: true, ballSpeed: 1.05, brickDamageMult: 1.25 },
-    // Levels ≥8: harder scale (~−2% paddle, +2% ball vs L7 cascade). Only L8 exists beyond 7 for now.
+    // Levels ≥8: harder scale (~−2% paddle, +2% ball vs L7 cascade). L8 = Queen, L9 = Warden (último nivel).
     { id: 8, name: 'Nivel 8', mech: 'mech-level8-hand-l.png', queen: 'mech-level8-queen.png', queenUnder: 'mech-level8-queen-under.png', handL: 'mech-level8-hand-l.png', handR: 'mech-level8-hand-r.png', bg: 'bg-level8.jpg', queenBoss: true, irregularBricks: true, mechScale: 0.58, paddleScale: 0.8259, groundFrac: 0.82, dodge: true, ballSpeed: 1.0924, brickDamageMult: 1.3 },
+    // Nivel 9 — Mactronic Warden: mech de SPRITESHEET (4 frames) sobre rejilla canónica con daño persistente.
+    // Anclas (ex,ey) = visor del mech en cada frame (fracción de la imagen) para registrar los frames entre sí.
+    { id: 9, name: 'Nivel 9', mech: 'mech-level9-warden-1-front.webp?v=1', warden: true, bg: 'bg-level9.jpg?v=1',
+      wardenFrames: [
+        { src: 'mech-level9-warden-1-front.webp?v=1', ex: 0.42, ey: 0.0399 },
+        { src: 'mech-level9-warden-2-front.webp?v=1', ex: 0.5444, ey: 0.0949 },
+        { src: 'mech-level9-warden-3-quarter.webp?v=1', ex: 0.5976, ey: 0.1055 },
+        { src: 'mech-level9-warden-4-attack.webp?v=1', ex: 0.6034, ey: 0.1105 },
+      ],
+      paddleScale: 0.81, groundFrac: 0.8, ballSpeed: 1.1, brickDamageMult: 1.3 },
   ];
   let levelIndex = 0;
   function level() { return LEVELS[levelIndex]; }
@@ -940,6 +950,14 @@
   }
 
   function loadImage() {
+    if (level().warden) {
+      imgDataLower = null; imgDataUpper = null;
+      gridLower = null; gridUpper = null;
+      brickLayerLower = null; brickLayerUpper = null;
+      imgData = new Uint8ClampedArray(4);
+      imgW = 1; imgH = 1;
+      return loadWardenAssets();
+    }
     if (level().queenBoss) {
       imgDataLower = null;
       imgDataUpper = null;
@@ -1008,6 +1026,7 @@
   }
 
   function drawBrickToLayer(br) {
+    if (level().warden) { wardenSyncBrick(br); return; }
     const layerCanvas = brickLayerCanvasFor(br);
     if (!layerCanvas) return;
     const lctx = layerCanvas.getContext('2d');
@@ -1137,6 +1156,7 @@
    * eject to safe band if still nested after push attempts.
    */
   function resolvePaddleVsBricks() {
+    if (level().warden) return; // el Warden pasa por encima: la pala no se empuja
     if (!paddle || !cols || !rows || !cellScreen) return;
     // L7 King: X-only paddle — skip brick resolve so it cannot jitter into the king
     if (isKingLevel7()) {
@@ -1566,6 +1586,7 @@
   /** Soporte realista: toda la zona de pies es cimiento hasta que casi se destruye.
    *  Con fly:true, el núcleo flotante = componente conexa más grande (sin exigir piso). */
   function recomputeSupport() {
+    if (level().warden) { wardenRecompute(); return; }
     if (l8Skel) return;
     const n = bricks.length;
     const supported = new Uint8Array(n);
@@ -1832,7 +1853,7 @@
     bumpCam(8);
     // Caos inicial: explosiones, humo, pedazos
     for (let i = 0; i < 7; i++) {
-      const x = originX + Math.random() * (imgW * (cellScreen / Math.max(1, cell)));
+      const x = level().warden ? W * (0.2 + Math.random() * 0.6) : originX + Math.random() * (imgW * (cellScreen / Math.max(1, cell)));
       const y = originY + Math.random() * (groundY - originY) * 0.85;
       spawnDust(x, y, 'rgb(255,110,30)', 28, { spread: 2.4, up: 3.2, big: true, long: true, jitter: 30 });
       spawnDust(x, y, 'rgb(60,55,50)', 34, { ground: true, hemisphere: true, spread: 2.2, up: 2.6, big: true, long: true, jitter: 40 });
@@ -2037,7 +2058,9 @@
       won = true;
       window.__gotoNext = false;
       hint.classList.add('show');
-      hint.innerHTML = '<strong>¡Zona despejada!</strong><span>Completaste los niveles · Reinicia</span>';
+      hint.innerHTML = level().warden
+        ? '<strong>¡Warden destruido!</strong><span>¡Zona despejada! Completaste los 9 niveles · Reinicia</span>'
+        : '<strong>¡Zona despejada!</strong><span>Completaste los niveles · Reinicia</span>';
       updateHud();
     }
   }
@@ -4761,6 +4784,877 @@
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NIVEL 9 — Mactronic Warden (mech de SPRITESHEET, daño persistente entre frames)
+  //
+  // Un único conjunto canónico de ladrillos (rejilla WD_C×WD_R en coordenadas
+  // normalizadas del mech, registradas con el "ojo/visor" como ancla). Cada frame
+  // del spritesheet solo decide QUÉ celdas son visibles y su color; el estado de
+  // daño es UNO SOLO (bricks[i].alive/falling) y se aplica a todos los frames.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const WD_C = 52, WD_R = 76, WD_LP = 10;      // rejilla canónica + px por celda en capas
+  const WD_ASPECT = WD_C / WD_R;               // celdas cuadradas
+  const WD_CEX = 0.55, WD_CEY = 0.085;         // visor canónico (u,v)
+  const WD_S_FAR = 0.085;                      // escala lejana (horizonte)
+  const WD_REGIONS = [
+    'cabeza', 'hombro-izq', 'hombro-der', 'pecho', 'brazo-izq', 'brazo-der',
+    'garra-izq', 'garra-der', 'cintura', 'chasis', 'rueda-1', 'rueda-2', 'rueda-3', 'rueda-4',
+  ];
+  // Cronograma (segundos de juego)
+  const WD_T = {
+    firstFar: 2.4,        // primer plano lejano antes de la primera carga (cuenta desde el saque)
+    farMin: 3, farMax: 8, // espera lejos antes de cargar
+    charge: 2.6,          // aceleración hasta pose de ataque (s = u^3)
+    hold: 1.7,            // pose de ataque (zarpazo con arena)
+    exit: 1.1,            // sale por la derecha
+    awayMin: 3, awayMax: 8, // fuera de cámara
+    appear: 0.9,          // reaparece pequeño (fade + calor)
+    blend: 0.30,          // fundido entre frames
+  };
+  let wd = null;
+  let wdFrameData = null; // [{w,h,data,ex,ey}] caché entre builds
+  let wdWarned = false;
+
+  function wdRegionIndex(u, v) {
+    if (v < 0.17) {
+      if (u >= 0.33 && u <= 0.78) return 0;
+      return u < 0.33 ? 1 : 2;
+    }
+    if (v < 0.36) return u < 0.22 ? 4 : (u > 0.85 ? 5 : 3);
+    if (v < 0.56) return u < 0.22 ? 6 : (u > 0.85 ? 7 : 8);
+    if (v < 0.74) return 9;
+    if (u < 0.5) return v < 0.87 ? 10 : 12;
+    return v < 0.87 ? 11 : 13;
+  }
+
+  function wdSmooth(u) { u = Math.max(0, Math.min(1, u)); return u * u * (3 - 2 * u); }
+
+  async function loadWardenAssets() {
+    if (wdFrameData) return;
+    const defs = level().wardenFrames || [];
+    const imgs = await Promise.all(defs.map((d) => loadImg(d.src)));
+    wdFrameData = imgs.map((img, i) => {
+      const w = img.naturalWidth, h = img.naturalHeight;
+      const off = document.createElement('canvas');
+      off.width = w; off.height = h;
+      const c = off.getContext('2d', { willReadFrequently: true });
+      c.drawImage(img, 0, 0);
+      return { w, h, data: c.getImageData(0, 0, w, h).data, ex: defs[i].ex, ey: defs[i].ey };
+    });
+  }
+
+  /** Construye bricks[] canónicos + máscaras/colores por frame + capas pre-renderizadas. */
+  function wardenBuildCanon() {
+    const C = WD_C, R = WD_R, N = C * R, LP = WD_LP;
+    const F = wdFrameData.length;
+    const vis = [], col = [];
+    for (let f = 0; f < F; f++) {
+      const fd = wdFrameData[f];
+      const m = new Uint8Array(N);
+      const rgb = new Uint8Array(N * 3);
+      const exp = fd.ex * fd.w, eyp = fd.ey * fd.h;
+      const xs = new Float32Array(C + 1), ys = new Float32Array(R + 1);
+      for (let i = 0; i <= C; i++) {
+        const u = i / C;
+        xs[i] = u <= WD_CEX ? (u / WD_CEX) * exp : exp + ((u - WD_CEX) / (1 - WD_CEX)) * (fd.w - exp);
+      }
+      for (let j = 0; j <= R; j++) {
+        const v = j / R;
+        ys[j] = v <= WD_CEY ? (v / WD_CEY) * eyp : eyp + ((v - WD_CEY) / (1 - WD_CEY)) * (fd.h - eyp);
+      }
+      const d = fd.data;
+      for (let j = 0; j < R; j++) {
+        const y0 = Math.max(0, Math.floor(ys[j]));
+        const y1 = Math.min(fd.h, Math.max(y0 + 1, Math.ceil(ys[j + 1])));
+        for (let i = 0; i < C; i++) {
+          const x0 = Math.max(0, Math.floor(xs[i]));
+          const x1 = Math.min(fd.w, Math.max(x0 + 1, Math.ceil(xs[i + 1])));
+          let n = 0, tot = 0, r = 0, g = 0, b = 0;
+          for (let y = y0; y < y1; y++) {
+            let p = (y * fd.w + x0) * 4;
+            for (let x = x0; x < x1; x++, p += 4) {
+              tot++;
+              if (d[p + 3] < 40) continue;
+              n++; r += d[p]; g += d[p + 1]; b += d[p + 2];
+            }
+          }
+          if (tot > 0 && n / tot >= 0.5) {
+            const k = j * C + i;
+            m[k] = 1;
+            rgb[k * 3] = (r / n) | 0; rgb[k * 3 + 1] = (g / n) | 0; rgb[k * 3 + 2] = (b / n) | 0;
+          }
+        }
+      }
+      vis.push(m); col.push(rgb);
+    }
+    const list = [];
+    const idByKey = new Int32Array(N).fill(-1);
+    const regTotal = new Int32Array(WD_REGIONS.length);
+    for (let k = 0; k < N; k++) {
+      let f0 = -1;
+      for (let f = 0; f < F; f++) if (vis[f][k]) { f0 = f; break; }
+      if (f0 < 0) continue;
+      const ix = k % C, iy = (k / C) | 0;
+      const reg = wdRegionIndex((ix + 0.5) / C, (iy + 0.5) / R);
+      regTotal[reg]++;
+      idByKey[k] = list.length;
+      list.push({
+        ix, iy, key: k,
+        baseX: ix * LP, baseY: iy * LP,
+        x: -1e5, y: -1e5, w: 1, h: 1,
+        color: `rgb(${col[f0][k * 3]},${col[f0][k * 3 + 1]},${col[f0][k * 3 + 2]})`,
+        hp: 1, maxHp: 1,
+        alive: true, falling: false, settled: false, vx: 0, vy: 0,
+        layer: null, reg, hid: true,
+      });
+    }
+    // Capas pre-renderizadas (una por frame). Todas comparten el mismo estado de daño.
+    const layers = [];
+    for (let f = 0; f < F; f++) {
+      const cv = document.createElement('canvas');
+      cv.width = C * LP; cv.height = R * LP;
+      const lc = cv.getContext('2d');
+      for (let k = 0; k < N; k++) {
+        if (!vis[f][k]) continue;
+        const x = (k % C) * LP, y = ((k / C) | 0) * LP;
+        lc.fillStyle = `rgb(${col[f][k * 3]},${col[f][k * 3 + 1]},${col[f][k * 3 + 2]})`;
+        lc.fillRect(x, y, LP, LP);
+        lc.strokeStyle = 'rgba(0,0,0,0.34)';
+        lc.lineWidth = 1;
+        lc.strokeRect(x + 0.5, y + 0.5, LP - 1, LP - 1);
+      }
+      layers.push(cv);
+    }
+    return { list, idByKey, vis, col, layers, regTotal };
+  }
+
+  function wardenHorizonY() {
+    const iw = (bgImg && bgImg.naturalWidth) || 1152, ih = (bgImg && bgImg.naturalHeight) || 1712;
+    const sc = Math.max((W * 1.06) / iw, (H * 1.08) / ih);
+    const dh = ih * sc;
+    const dy = -(dh - H) * 0.15;
+    return dy + 0.235 * dh;
+  }
+
+  function wardenSyncBrick(br) {
+    if (!wd) return;
+    if (br.alive && !br.falling && !br.settled) return;
+    if (br.falling && !br.fallColored) {
+      br.fallColored = true;
+      const a = wd.col[wd.active];
+      if (a && wd.vis[wd.active][br.key]) br.color = `rgb(${a[br.key * 3]},${a[br.key * 3 + 1]},${a[br.key * 3 + 2]})`;
+    }
+    const LP = WD_LP;
+    for (const cv of wd.layers) {
+      cv.getContext('2d').clearRect(br.ix * LP, br.iy * LP, LP, LP);
+    }
+  }
+
+  function wardenStanding() {
+    let n = 0;
+    for (let i = 0; i < bricks.length; i++) {
+      const b = bricks[i];
+      if (b.alive && !b.falling && !b.settled) n++;
+    }
+    return n;
+  }
+
+  /** Estadística por región (en espacio canónico: igual en cualquier frame). */
+  function wardenRegionStats() {
+    const alive = new Int32Array(WD_REGIONS.length);
+    for (const b of bricks) if (b.alive && !b.falling && !b.settled) alive[b.reg]++;
+    const out = {};
+    for (let r = 0; r < WD_REGIONS.length; r++) {
+      const t = wd.regTotal[r];
+      out[WD_REGIONS[r]] = { total: t, alive: alive[r], destroyedPct: t ? Math.round(100 * (1 - alive[r] / t)) : 0 };
+    }
+    return out;
+  }
+
+  function wardenGridRebuild() {
+    grid.fill(-1);
+    if (!wd.visible) return;
+    const vm = wd.vis[wd.active];
+    for (let i = 0; i < bricks.length; i++) {
+      const b = bricks[i];
+      if (!b.alive || b.falling || b.settled || !vm[b.key]) continue;
+      grid[b.iy * cols + b.ix] = i;
+    }
+  }
+
+  /** Coloca ladrillos del frame activo en pantalla (escala/posición actuales). */
+  function wardenPlace() {
+    if (!wd) return;
+    const hy = wardenHorizonY();
+    wd.horizonY = hy;
+    const nearH = Math.min(H * 0.72, (W * 0.96) / WD_ASPECT);
+    const nearBase = H * 0.80;
+    const s = wd.s;
+    const mechH = nearH * s, mechW = mechH * WD_ASPECT;
+    const baseY = hy + (nearBase - hy) * s;
+    wd.mechW = mechW; wd.mechH = mechH; wd.baseY = baseY;
+    const show = wd.visible;
+    originX = show ? wd.cx - mechW / 2 : -1e5;
+    originY = baseY - mechH;
+    cellScreen = Math.max(0.05, mechW / WD_C);
+    brickPx = cellScreen + 1;
+    fitScale = cellScreen;
+    groundY = Math.max(baseY + 1, hy + 4);
+    structureDX = 0; structureDY = 0;
+    const stateKey = (show ? 1 : 0) + ':' + wd.active;
+    const rebuild = stateKey !== wd.placedKey || wd.gridDirty;
+    wd.placedKey = stateKey;
+    wd.gridDirty = false;
+    const vm = wd.vis[wd.active];
+    const bp = cellScreen + 1;
+    for (let i = 0; i < bricks.length; i++) {
+      const b = bricks[i];
+      if (!b.alive || b.falling || b.settled) continue;
+      if (!show || !vm[b.key]) { b.hid = true; b.x = -1e5; b.y = -1e5; continue; }
+      b.hid = false;
+      b.x = originX + b.ix * cellScreen;
+      b.y = originY + b.iy * cellScreen;
+      b.w = bp; b.h = bp;
+    }
+    if (rebuild) wardenGridRebuild();
+  }
+
+  /** ≤50% restante → todo cae (limitado: máx ~420 piezas físicas, el resto se esfuma). */
+  function wardenCollapse() {
+    if (wd.collapsed) return;
+    wd.collapsed = true;
+    const stand = [];
+    for (const b of bricks) if (b.alive && !b.falling && !b.settled) stand.push(b);
+    let nVis = 0;
+    for (const b of stand) if (!b.hid) nVis++;
+    const stride = Math.max(1, Math.ceil(nVis / 420));
+    let k = 0;
+    for (const b of stand) {
+      if (!b.hid && (k++ % stride) === 0) {
+        const a = wd.col[wd.active];
+        if (a) b.color = `rgb(${a[b.key * 3]},${a[b.key * 3 + 1]},${a[b.key * 3 + 2]})`;
+        b.fallColored = true;
+        b.falling = true;
+        b.vx = (Math.random() - 0.5) * 1.1;
+        b.vy = 0.2 + Math.random() * 0.7;
+      } else {
+        b.alive = false; b.falling = false; b.settled = false;
+      }
+    }
+    grid.fill(-1);
+    for (const cv of wd.layers) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    window.__hudBrickDirty = true;
+    if (wd.visible) {
+      const cx = wd.cx, by = wd.baseY;
+      for (let i = 0; i < 5; i++) {
+        const x = cx + (Math.random() - 0.5) * wd.mechW * 0.8;
+        const y = by - Math.random() * wd.mechH * 0.8;
+        spawnDust(x, y, 'rgb(255,150,50)', 10, { spread: 2.0, up: 2.6, big: true, long: true, jitter: 16 });
+        spawnDust(x, y, 'rgb(150,120,80)', 12, { ground: true, hemisphere: true, spread: 1.8, up: 2.0, big: true, long: true, jitter: 20 });
+      }
+    }
+    bumpCam(6);
+    wd.state = 'dying';
+  }
+
+  function wardenRecompute() {
+    if (!wd) return;
+    const live = wardenStanding();
+    wd.live = live;
+    structureCount = live;
+    if (live > 0 && live <= wd.start * 0.50) wardenCollapse();
+    if (wd.collapsed) {
+      structureCount = wardenStanding();
+      wd.visible = false;
+      originX = -1e5;
+    }
+    updateHud();
+    maybeWin();
+  }
+
+  /** Quita ladrillos sin disparar recompute (para lotes). */
+  function wardenQuietKill(b) {
+    if (!b.alive || b.falling || b.settled) return;
+    b.alive = false; b.falling = false;
+    if (grid) { const gi = b.iy * cols + b.ix; if (grid[gi] >= 0) grid[gi] = -1; }
+    wardenSyncBrick(b);
+  }
+
+  /** Lejos (ladrillos diminutos): un golpe de bola rompe un racimo del tamaño de la bola. */
+  function wardenClusterAfterHit(br0) {
+    if (!wd || !ball) return;
+    const r = ball.r * 0.9;
+    if (cellScreen > ball.r * 0.45) return;
+    const cx = br0.x + br0.w / 2, cy = br0.y + br0.h / 2;
+    const span = Math.ceil(r / cellScreen) + 1;
+    let n = 0;
+    for (let dy = -span; dy <= span && n < 60; dy++) {
+      const iy = br0.iy + dy;
+      if (iy < 0 || iy >= rows) continue;
+      for (let dx = -span; dx <= span && n < 60; dx++) {
+        const ix = br0.ix + dx;
+        if (ix < 0 || ix >= cols) continue;
+        const id = grid[iy * cols + ix];
+        if (id < 0) continue;
+        const b = bricks[id];
+        if (!b.alive || b.falling || b.settled) continue;
+        const ddx = b.x + b.w / 2 - cx, ddy = b.y + b.h / 2 - cy;
+        if (ddx * ddx + ddy * ddy > r * r) continue;
+        wardenQuietKill(b);
+        n++;
+      }
+    }
+    if (n) {
+      window.__hudBrickDirty = true;
+      wardenRecompute();
+    }
+  }
+
+  /** Bomba / explosión sobre el mech: lote ligero (nunca miles de partículas). */
+  function wardenExplode(x, y, R, pts) {
+    if (!wd) return 0;
+    const r2 = R * R;
+    const hit = [];
+    const cs = cellScreen;
+    const ix0 = Math.max(0, Math.floor((x - R - originX) / cs) - 1);
+    const ix1 = Math.min(cols - 1, Math.floor((x + R - originX) / cs) + 1);
+    const iy0 = Math.max(0, Math.floor((y - R - originY) / cs) - 1);
+    const iy1 = Math.min(rows - 1, Math.floor((y + R - originY) / cs) + 1);
+    if (wd.visible) {
+      for (let iy = iy0; iy <= iy1; iy++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const id = grid[iy * cols + ix];
+          if (id < 0) continue;
+          const b = bricks[id];
+          if (!b.alive || b.falling || b.settled) continue;
+          const dx = b.x + b.w / 2 - x, dy = b.y + b.h / 2 - y;
+          if (dx * dx + dy * dy <= r2) hit.push(b);
+        }
+      }
+    }
+    // piezas ya cayendo dentro del radio también se pulverizan
+    for (const b of bricks) {
+      if (!b.alive || !b.falling) continue;
+      const dx = b.x + b.w / 2 - x, dy = b.y + b.h / 2 - y;
+      if (dx * dx + dy * dy <= r2) { b.alive = false; b.falling = false; }
+    }
+    let flung = 0;
+    const stride = Math.max(1, Math.ceil(hit.length / 70));
+    for (let i = 0; i < hit.length; i++) {
+      const b = hit[i];
+      if (flung < 90 && (i % stride) === 0) {
+        // sale despedido como escombro (cuenta como destruido en el espacio canónico)
+        if (grid) grid[b.iy * cols + b.ix] = -1;
+        b.falling = true; b.fallColored = false;
+        const dx = b.x + b.w / 2 - x, dy = b.y + b.h / 2 - y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const f = 2.5 + Math.random() * 3.5;
+        b.vx = (dx / d) * f; b.vy = (dy / d) * f - (1.5 + Math.random() * 2.5);
+        wardenSyncBrick(b);
+        flung++;
+      } else {
+        wardenQuietKill(b);
+      }
+    }
+    score += pts * hit.length;
+    if (hit.length) {
+      window.__hudBrickDirty = true;
+      spawnDust(x, y, 'rgb(255,150,50)', 16, { spread: 2.0, up: 2.6, big: true, long: true, jitter: 14 });
+      spawnDust(x, y, 'rgb(160,125,85)', 14, { spread: 1.8, up: 1.8, big: true, long: true, jitter: 18 });
+      if (hit.length >= 4) spawnCoinFly(x, y, Math.min(6, 2 + ((hit.length / 12) | 0)));
+      wardenRecompute();
+    }
+    return hit.length;
+  }
+
+  // ── Cámara de moto: vibración continua + baches/saltos + inclinación + zoom ──
+  function wardenCamUpdate(dt) {
+    const c = wd.cam;
+    const sk = wd.speedK;
+    c.nextBump -= dt;
+    if (c.nextBump <= 0) {
+      const big = Math.random() < 0.28;
+      c.v += -(big ? 2.8 + Math.random() * 1.0 : 0.9 + Math.random() * 0.8) * (1 + sk * 0.5) * 60;
+      c.tv += (Math.random() < 0.5 ? -1 : 1) * (big ? 0.008 : 0.003 + Math.random() * 0.003) * 60;
+      c.zp = big ? 1 : 0.4;
+      if (big) camShake = Math.min(18, camShake + 1.2 + sk * 1.5);
+      c.nextBump = (0.6 + Math.random() * 1.9) * (1 - sk * 0.45);
+    }
+    // resortes amortiguados (dt capado a 0.033)
+    const k1 = 95, d1 = 9.5;
+    c.v += (-k1 * c.y - d1 * c.v) * dt;
+    c.y += c.v * dt;
+    if (c.y > 0) { c.y = 0; if (c.v > 0) c.v *= -0.2; } // el "salto" solo sube; aterriza amortiguado
+    if (c.y < -10) c.y = -10;
+    const k2 = 70, d2 = 7;
+    c.tv += (-k2 * c.t - d2 * c.tv) * dt;
+    c.t += c.tv * dt;
+    c.t = Math.max(-0.02, Math.min(0.02, c.t));
+    c.zp = Math.max(0, c.zp - dt * 2.2);
+  }
+  function wardenCamera(t) {
+    const c = wd.cam, sk = wd.speedK;
+    const vib = 0.45 + sk * 1.9;
+    return {
+      ox: Math.sin(t * 47.0) * vib * 0.5 + Math.sin(t * 29.3) * vib * 0.3,
+      oy: c.y + Math.cos(t * 53.1) * vib * 0.5 + Math.sin(t * 31.7) * vib * 0.25,
+      rot: c.t + Math.sin(t * 0.7) * 0.006 + Math.sin(t * 37.0) * 0.0008 * (1 + sk * 2),
+      zoom: 1.012 + sk * 0.012 + c.zp * 0.010,
+    };
+  }
+
+  // ── Máquina de estados del Warden ──
+  function wardenSetState(st) {
+    wd.state = st;
+    wd.stT = 0;
+    if (st === 'far') wd.idle = (wd.firstIdle ? WD_T.firstFar : WD_T.farMin + Math.random() * (WD_T.farMax - WD_T.farMin));
+    if (st === 'away') wd.idle = WD_T.awayMin + Math.random() * (WD_T.awayMax - WD_T.awayMin);
+    if (st === 'charge') {
+      wd.nearX = W * (0.5 + (Math.random() - 0.5) * 0.14);
+      wd.farX0 = wd.cx;
+    }
+    wd.firstIdle = false;
+    wd.swiped = false;
+  }
+
+  function wardenWantFrame(s) {
+    if (wd.state === 'hold' || wd.state === 'exit') return wd.F - 1;
+    const n = wd.F;
+    if (n >= 4) return s < 0.34 ? 0 : s < 0.60 ? 1 : s < 0.82 ? 2 : 3;
+    return Math.min(n - 1, Math.floor(s * n));
+  }
+
+  function wardenSpawnWheelDust(dt) {
+    const rate = (wd.state === 'far' ? 10 : 20) * (0.35 + wd.speedK * 2.4);
+    wd.dustAcc += rate * dt;
+    const sz = Math.max(2, wd.mechH * 0.035);
+    while (wd.dustAcc >= 1) {
+      wd.dustAcc -= 1;
+      if (wd.dust.length > 150) break;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      wd.dust.push({
+        x: wd.cx + side * wd.mechW * (0.18 + Math.random() * 0.22),
+        y: wd.baseY - Math.random() * wd.mechH * 0.03,
+        vx: side * (0.2 + Math.random() * 0.9) * (0.3 + wd.s) + (Math.random() - 0.5) * 0.4,
+        vy: -(0.25 + Math.random() * 0.9) * (0.35 + wd.s * 0.9),
+        r: sz * (0.7 + Math.random() * 1.1) * (1 + wd.speedK * 1.2),
+        a: 0.28 + Math.random() * 0.22,
+        life: 0, max: 0.9 + Math.random() * 1.2,
+        front: Math.random() < 0.22,
+      });
+    }
+  }
+
+  function updateWarden(dt) {
+    if (!wd) return;
+    wd.t += dt;
+    const T = WD_T;
+    const st = wd.state;
+    wd.stT += dt;
+    let speedK = 0.12;
+    if (st === 'far') {
+      if (launched) wd.idle -= dt;
+      wd.s = WD_S_FAR * (1 + 0.04 * Math.sin(wd.t * 2.1));
+      wd.cx = wd.farX + Math.sin(wd.t * 0.6) * W * 0.02;
+      wd.visible = true; wd.alpha = Math.min(1, wd.alpha + dt * 2);
+      speedK = 0.18;
+      if (wd.idle <= 0) wardenSetState('charge');
+    } else if (st === 'charge') {
+      const u = Math.min(1, wd.stT / T.charge);
+      wd.s = WD_S_FAR + (1 - WD_S_FAR) * u * u * u;
+      wd.cx = wd.farX0 + (wd.nearX - wd.farX0) * wdSmooth(u * 1.05) + Math.sin(wd.t * 3.0) * W * 0.012 * u;
+      wd.visible = true; wd.alpha = 1;
+      speedK = 0.25 + 0.75 * u;
+      if (u >= 1) { wardenSetState('hold'); wd.lastNearX = wd.cx; }
+    } else if (st === 'hold') {
+      const u = Math.min(1, wd.stT / T.hold);
+      // zarpazo: embestida corta (escala) + vaivén lateral, con ráfaga de arena
+      const sw = Math.max(0, Math.min(1, (wd.stT - 0.35) / 0.55));
+      const lunge = Math.sin(sw * Math.PI);
+      wd.s = 1.0 + 0.06 * lunge + 0.012 * Math.sin(wd.t * 6);
+      wd.cx = wd.lastNearX + Math.sin(sw * Math.PI * 2) * -W * 0.035;
+      wd.visible = true; wd.alpha = 1;
+      speedK = 0.7;
+      if (!wd.swiped && wd.stT >= 0.45) {
+        wd.swiped = true;
+        bumpCam(5.5);
+        wd.cam.v += -3.2 * 60;
+        const cx = wd.cx - wd.mechW * 0.18, cy = wd.baseY - wd.mechH * 0.55;
+        spawnDust(cx, cy, 'rgb(225,185,125)', 26, { spread: 2.6, up: 1.6, big: true, long: true, jitter: 40 });
+        spawnDust(wd.cx, wd.baseY - 6, 'rgb(215,175,120)', 24, { ground: true, hemisphere: true, spread: 2.4, up: 2.4, big: true, long: true, jitter: 60 });
+      }
+      if (u >= 1) wardenSetState('exit');
+    } else if (st === 'exit') {
+      const u = Math.min(1, wd.stT / T.exit);
+      const e = Math.pow(u, 1.7);
+      wd.s = 1.0 + 0.22 * u;
+      const target = W + wd.mechW * 0.75;
+      wd.cx = wd.lastNearX + (target - wd.lastNearX) * e;
+      wd.visible = true; wd.alpha = 1;
+      speedK = 1;
+      if (u > 0.2 && Math.random() < dt * 14) {
+        spawnDust(wd.cx - wd.mechW * 0.3, wd.baseY - 4, 'rgb(215,175,120)', 8, { ground: true, hemisphere: true, spread: 2.2, up: 1.8, big: true, long: true, jitter: 40 });
+      }
+      if (u >= 1) { wd.visible = false; wardenSetState('away'); }
+    } else if (st === 'away') {
+      wd.visible = false;
+      speedK = 0.05;
+      wd.idle -= dt;
+      if (wd.idle <= 0) {
+        wd.farX = W * (0.3 + Math.random() * 0.4);
+        wd.cx = wd.farX; wd.s = WD_S_FAR; wd.alpha = 0;
+        wd.cur = 0; wd.blend = null; wd.active = 0;
+        wd.visible = true;
+        wardenSetState('appear');
+      }
+    } else if (st === 'appear') {
+      wd.s = WD_S_FAR;
+      wd.cx = wd.farX;
+      wd.visible = true;
+      wd.alpha = Math.min(1, wd.stT / T.appear);
+      speedK = 0.1;
+      if (wd.stT >= T.appear) wardenSetState('far');
+    } else if (st === 'dying') {
+      wd.visible = false;
+      speedK = 0.1;
+    }
+    wd.speedK += (speedK - wd.speedK) * Math.min(1, dt * 4);
+
+    // frame del spritesheet según distancia (con fundido); el daño NO se toca aquí
+    if (wd.visible) {
+      const want = wardenWantFrame(wd.s);
+      if (want !== wd.cur) {
+        wd.blend = { from: wd.cur, to: want, t: 0 };
+        wd.cur = want;
+      }
+      if (wd.blend) {
+        wd.blend.t += dt / T.blend;
+        if (wd.blend.t >= 1) wd.blend = null;
+      }
+      wd.active = wd.blend ? (wd.blend.t < 0.5 ? wd.blend.from : wd.blend.to) : wd.cur;
+    }
+    wardenPlace();
+    wardenCamUpdate(dt);
+
+    // polvo de ruedas + partículas de suelo (ligeras, con tope)
+    if (wd.visible && st !== 'dying') wardenSpawnWheelDust(dt);
+    for (let i = wd.dust.length - 1; i >= 0; i--) {
+      const p = wd.dust[i];
+      p.life += dt;
+      if (p.life >= p.max) { wd.dust.splice(i, 1); continue; }
+      p.x += p.vx * dt * 60; p.y += p.vy * dt * 60;
+      p.vx *= 0.985; p.r += dt * 6 * (0.5 + wd.s);
+    }
+    // vetas de velocidad: salen del horizonte hacia la cámara (aceleran al acercarse)
+    const hy = wd.horizonY || H * 0.25;
+    const sp = (0.55 + wd.speedK * 0.9) * dt;
+    for (const s of wd.streaks) {
+      s.d += sp * (0.25 + 1.7 * s.d);
+      if (s.d > 1.05) { s.d = 0.02 + Math.random() * 0.05; s.a = (Math.random() * 2 - 1) * 0.95; s.l = 0.5 + Math.random(); }
+    }
+    // tierra levantada en primer plano
+    wd.dirtAcc += (5 + wd.speedK * 22) * dt;
+    while (wd.dirtAcc >= 1) {
+      wd.dirtAcc -= 1;
+      if (wd.dirt.length > 60) break;
+      wd.dirt.push({
+        x: Math.random() * W, y: H * (0.78 + Math.random() * 0.2),
+        vx: (Math.random() - 0.5) * 3, vy: -(1.5 + Math.random() * 3.2),
+        r: 0.8 + Math.random() * 2.2, life: 0, max: 0.45 + Math.random() * 0.5,
+      });
+    }
+    for (let i = wd.dirt.length - 1; i >= 0; i--) {
+      const p = wd.dirt[i];
+      p.life += dt;
+      if (p.life >= p.max) { wd.dirt.splice(i, 1); continue; }
+      p.x += p.vx * dt * 60; p.y += p.vy * dt * 60; p.vy += 0.16 * dt * 60;
+    }
+    wd.bandPhase = (wd.bandPhase + dt * (0.35 + wd.speedK * 0.9)) % 1;
+    if (wd.speedK > 0.5 && Math.random() < dt * 3 * wd.speedK) bumpCam(0.4);
+  }
+
+  // ── Dibujo ──
+  function wardenDrawBackground() {
+    const hy = wd ? wd.horizonY : H * 0.25;
+    const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
+    const sc = Math.max((W * 1.06) / iw, (H * 1.08) / ih);
+    const dw = iw * sc, dh = ih * sc;
+    const par = wd ? -((wd.cx - W / 2) * 0.05) : 0;
+    const sway = Math.sin(bgT * 0.35) * Math.min(12, (dw - W) * 0.08) + par;
+    const dx = -(dw - W) / 2 + sway;
+    const dy = -(dh - H) * 0.15;
+    ctx.drawImage(bgImg, dx, dy, dw, dh);
+    // calina de calor en el horizonte
+    const g = ctx.createLinearGradient(0, hy - H * 0.05, 0, hy + H * 0.06);
+    g.addColorStop(0, 'rgba(255,238,210,0)');
+    g.addColorStop(0.5, 'rgba(255,238,210,0.20)');
+    g.addColorStop(1, 'rgba(255,238,210,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, hy - H * 0.05, W, H * 0.11);
+    // suelo que corre hacia la cámara (bandas con perspectiva)
+    if (wd) {
+      const N = 14, span = H - hy;
+      for (let k = 0; k < N; k++) {
+        const d = ((k / N) + wd.bandPhase) % 1;
+        const y = hy + span * d * d;
+        const th = 1 + d * d * span * 0.05;
+        ctx.fillStyle = (k & 1) ? `rgba(120,70,30,${0.05 + 0.10 * d})` : `rgba(255,225,170,${0.04 + 0.08 * d})`;
+        ctx.fillRect(0, y, W, th);
+      }
+    }
+    // viñeta suave
+    const v = ctx.createLinearGradient(0, 0, 0, H);
+    v.addColorStop(0, 'rgba(20,14,8,0.10)');
+    v.addColorStop(1, 'rgba(20,10,4,0.22)');
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function wardenDrawDust(front) {
+    for (const p of wd.dust) {
+      if (!!p.front !== front) continue;
+      const k = p.life / p.max;
+      ctx.fillStyle = `rgba(222,186,138,${p.a * (1 - k)})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function wardenDrawLayer(f, alpha, haze) {
+    const cv = wd.layers[f];
+    if (!cv || alpha <= 0) return;
+    ctx.globalAlpha = alpha;
+    const x = originX, y = originY, w = wd.mechW, h = wd.mechH;
+    if (haze > 0.01) {
+      // espejismo: franjas horizontales con ondulación
+      const n = 10, sh = cv.height / n;
+      for (let i = 0; i < n; i++) {
+        const off = Math.sin(wd.t * 7 + i * 1.7) * haze * 1.4;
+        ctx.drawImage(cv, 0, i * sh, cv.width, sh + 1, x + off, y + (h / n) * i, w, h / n + 0.6);
+      }
+    } else {
+      ctx.drawImage(cv, x, y, w, h);
+    }
+  }
+
+  function drawWardenBack() {
+    if (!wd) return;
+    if (!wd.visible) { wardenDrawDust(false); return; }
+    // sombra bajo las ruedas
+    ctx.save();
+    ctx.globalAlpha = 0.38 * wd.alpha;
+    const sx = wd.cx, sy = wd.baseY + wd.mechH * 0.012, rw = wd.mechW * 0.62, rh = Math.max(3, wd.mechH * 0.05);
+    ctx.translate(sx, sy);
+    ctx.scale(1, rh / rw);
+    const g = ctx.createRadialGradient(0, 0, rw * 0.1, 0, 0, rw);
+    g.addColorStop(0, 'rgba(30,15,5,0.75)');
+    g.addColorStop(1, 'rgba(30,15,5,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, rw, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    wardenDrawDust(false);
+  }
+
+  function drawWardenMech() {
+    if (!wd || !wd.visible || wd.collapsed) return;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    const haze = Math.max(0, 1 - wd.s / 0.5);
+    const a = wd.alpha;
+    if (wd.blend) {
+      const t = wdSmooth(wd.blend.t);
+      wardenDrawLayer(wd.blend.from, a, haze);
+      wardenDrawLayer(wd.blend.to, a * t, haze);
+    } else {
+      wardenDrawLayer(wd.cur, a, haze);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    wardenDrawDust(true);
+  }
+
+  function drawWardenFront() {
+    if (!wd) return;
+    const hy = wd.horizonY || H * 0.25;
+    const vpx = W * 0.5;
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const s of wd.streaks) {
+      const d = s.d;
+      const d0 = Math.max(0, d - (0.03 + d * 0.12) * s.l * (1 + wd.speedK * 1.5));
+      const x1 = vpx + Math.sin(s.a) * d * W * 1.25, y1 = hy + d * (H - hy) * 1.05;
+      const x0 = vpx + Math.sin(s.a) * d0 * W * 1.25, y0 = hy + d0 * (H - hy) * 1.05;
+      ctx.strokeStyle = `rgba(242,214,164,${(0.04 + 0.26 * d) * (0.6 + wd.speedK * 0.6)})`;
+      ctx.lineWidth = 0.5 + 2.3 * d;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(120,84,48,0.55)';
+    for (const p of wd.dirt) {
+      const k = 1 - p.life / p.max;
+      ctx.globalAlpha = 0.25 + 0.5 * k;
+      ctx.fillRect(p.x, p.y, p.r * 1.6, p.r);
+    }
+    ctx.globalAlpha = 1;
+    // líneas de velocidad en los bordes al acelerar
+    if (wd.speedK > 0.45) {
+      const k = (wd.speedK - 0.45) / 0.55;
+      ctx.strokeStyle = `rgba(255,236,200,${0.10 * k})`;
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 9; i++) {
+        const side = i & 1 ? 1 : -1;
+        const y = ((i * 131 + wd.t * 520) % H);
+        const x = W * 0.5 + side * (W * (0.30 + ((i * 37) % 20) / 100));
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + side * (30 + 50 * k), y + 4);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function wardenHintTitle() {
+    hint.classList.add('show');
+    hint.innerHTML = '<strong>Nivel 9 — Mactronic Warden</strong><span>Te persigue por el desierto · ¡Toca para lanzar!</span>';
+  }
+
+  /** buildLevel() para el nivel 9. */
+  function buildWardenLevel() {
+    cols = WD_C; rows = WD_R; cell = 1;
+    structureDX = 0; structureDY = 0;
+    minIy = 0; maxIy = WD_R;
+    const pack = wardenBuildCanon();
+    bricks = pack.list;
+    grid = new Int32Array(WD_C * WD_R);
+    grid.fill(-1);
+    brickLayer = null; brickLayerLower = null; brickLayerUpper = null;
+    gridLower = null; gridUpper = null;
+    structures = [];
+    const farX = W * 0.5;
+    wd = {
+      F: pack.vis.length, vis: pack.vis, col: pack.col, layers: pack.layers, regTotal: pack.regTotal,
+      idByKey: pack.idByKey,
+      start: bricks.length, live: bricks.length, collapsed: false,
+      state: 'far', stT: 0, idle: WD_T.firstFar, firstIdle: false,
+      t: 0, s: WD_S_FAR, cx: farX, farX, farX0: farX, nearX: W * 0.5, lastNearX: W * 0.5,
+      visible: true, alpha: 1, speedK: 0.15,
+      cur: 0, active: 0, blend: null, placedKey: '', gridDirty: true,
+      mechW: 1, mechH: 1, baseY: H * 0.3, horizonY: wardenHorizonY(),
+      dust: [], dustAcc: 0, dirt: [], dirtAcc: 0, bandPhase: 0, swiped: false,
+      streaks: [],
+      cam: { y: 0, v: 0, t: 0, tv: 0, zp: 0, nextBump: 1.2 },
+    };
+    for (let i = 0; i < 44; i++) {
+      wd.streaks.push({ d: Math.random(), a: (Math.random() * 2 - 1) * 0.95, l: 0.5 + Math.random() });
+    }
+    wardenPlace();
+    structureCount = bricks.length;
+    structureStartCount = bricks.length;
+    aliveCount = bricks.length;
+    window.__dualStart = null;
+    window.__hudBrickDirty = true;
+    particles = [];
+    bombs = [];
+    playerBomb = null;
+    playerBombArmed = false;
+    setBombButton(false);
+    bombTimer = 6;
+    lives = START_LIVES;
+    gameOver = false;
+    won = false;
+    outro = null;
+    outroT = 0;
+    window.__outroDust = false;
+    bgT = 0;
+    bgDust = [];
+    launched = false;
+    clearLaserCannons();
+    basePaddleW = Math.min(168, W * 0.42) * effectivePaddleScale();
+    const pw = basePaddleW;
+    const ph = paddleHeightForWidth(pw);
+    paddle = { w: pw, h: ph, x: (W - pw) / 2, y: H - 28 - ph, r: 7 };
+    paddleTrail = [];
+    bigPaddleUntil = 0;
+    ballAirTrail = [];
+    const diameter = Math.max(5 * 3.92, 12);
+    baseBallR = diameter / 2;
+    const r = baseBallR * ballRadiusMult();
+    ball = {
+      r, x: 0, y: 0, vx: 0, vy: 0,
+      speed: Math.min(7.4, 5.4 + Math.min(2, W / 420)) * 0.7 * effectiveBallSpeedMult(),
+    };
+    stickBallToPaddle();
+    wardenHintTitleSafe();
+    if (bootMoney != null) setTimeout(() => { if (level().warden && !launched && !gameOver) wardenHintTitle(); }, 2800);
+    updateHud();
+    try { noteLevelStart(); } catch (_) {}
+    running = true;
+  }
+  function wardenHintTitleSafe() {
+    wardenHintTitle();
+    clearTimeout(window.__hintHide);
+    window.__hintHide = setTimeout(() => { if (launched && !gameOver && !paused) hint.classList.remove('show'); }, 2600);
+  }
+
+  // Depuración / pruebas automáticas
+  window.__wardenDebug = {
+    get wd() { return wd; },
+    get bricks() { return bricks; },
+    regionStats() { return wd ? wardenRegionStats() : null; },
+    standing() { return wardenStanding(); },
+    setFrame(i) { if (!wd) return; wd.cur = i; wd.blend = null; wd.active = i; wd.gridDirty = true; wardenPlace(); },
+    setState(st, s) {
+      if (!wd) return;
+      wardenSetState(st);
+      if (s != null) { wd.s = s; }
+      wd.visible = st !== 'away' && st !== 'dying';
+      wd.alpha = 1;
+      if (st === 'charge' && s != null) wd.stT = Math.cbrt(Math.max(0, (s - WD_S_FAR) / (1 - WD_S_FAR))) * WD_T.charge;
+      if (st === 'hold') wd.lastNearX = wd.cx;
+      wd.cur = wardenWantFrame(wd.s); wd.blend = null; wd.active = wd.cur; wd.gridDirty = true;
+      wardenPlace();
+    },
+    killRegion(name, n, frame) {
+      const ri = WD_REGIONS.indexOf(name);
+      const keys = [];
+      for (const b of bricks) {
+        if (b.reg !== ri || !b.alive || b.falling) continue;
+        if (frame != null && !wd.vis[frame][b.key]) continue;
+        keys.push(b.key);
+        if (keys.length >= n) break;
+      }
+      for (const k of keys) { const b = bricks[wd.idByKey[k]]; wardenQuietKill(b); }
+      window.__hudBrickDirty = true;
+      wd.live = wardenStanding();
+      structureCount = wd.live;
+      return keys;
+    },
+    aliveKeys() { return bricks.filter((b) => b.alive && !b.falling && !b.settled).map((b) => b.key); },
+    visibleKeys(frame) { return bricks.filter((b) => b.alive && !b.falling && !b.settled && wd.vis[frame][b.key]).map((b) => b.key); },
+    frameCount(f) { let n = 0; for (const b of bricks) if (wd.vis[f][b.key]) n++; return n; },
+    brickPitch() { return cellScreen; },
+    tick(dt, n) { for (let i = 0; i < (n || 1); i++) update(dt); },
+    placeBall(x, y, vx, vy) { launched = true; ball.x = x; ball.y = y; ball.vx = vx; ball.vy = vy; hint.classList.remove('show'); },
+    ball() { return ball ? { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy, r: ball.r } : null; },
+    info() { return { launched, won, gameOver, outro, score, lives, structureCount, particles: particles.length, falling: countFalling(), pitch: cellScreen, originX, originY }; },
+    W() { return W; }, H() { return H; },
+    explode(x, y, R) { explodeAt(x, y, R != null ? R : EXPLODE_R * 2.05, 1); },
+    shootBomb() { playerBombArmed = true; launched = true; const ok = firePlayerBomb(); return ok; },
+    laser() { try { startLaserCannons(); } catch (e) { return String(e); } return true; },
+    dropBomb(x, y) { playerBomb = { x, y, vx: 0, vy: -3, r: 9, phase: 'fuse', t: 1, alive: true, l8Ghost: false }; },
+    fireBolts(n) { if (!wd) return; paddle.x = wd.cx - paddle.w / 2; paddle.y = H - 60; for (let i = 0; i < n; i++) spawnLaserBolt(i); },
+    camSample(t) { return wd ? wardenCamera(t) : null; },
+    camY() { return wd ? wd.cam.y : 0; },
+    gotoNext() { return startNextLevel(); },
+    levelIndex() { return levelIndex; },
+  };
+
   function buildLevel() {
     resizeCanvas();
     clearL6Timers();
@@ -4810,6 +5704,8 @@
     gridUpper = null;
     brickLayerLower = null;
     brickLayerUpper = null;
+
+    if (level().warden) { buildWardenLevel(); return; }
 
     if (level().queenBoss) {
       // Queen is backdrop only — no bricks yet; hands spawn after intro
@@ -5222,6 +6118,7 @@
   }
 
   function flingBricksFromBlast(x, y, R) {
+    if (level().warden) return; // wardenExplode ya lanza los escombros (lote ligero)
     // L8 manos/cabeza/armadura: no simular vuelo de cientos/miles de ladrillos
     if (isL8ArmorRest() || (level().queenBoss && (l8Phase === 'hands' || l8Phase === 'head'))) return;
     const r2 = R * R;
@@ -6194,9 +7091,11 @@
     ball.speed = boost;
     ballLastAng = ang;
     ballStallT = 0;
+    if (level().warden) { try { wardenClusterAfterHit(br); } catch (e) { console.warn(e); } }
   }
 
   function explodeAtOnCurrent(x, y, R, pts, r2) {
+    if (level().warden) return wardenExplode(x, y, R, pts);
     // Armor rest: sin polvo por ladrillo ni grafo de soporte
     if (isL8ArmorRest()) {
       let hit = 0;
@@ -6296,10 +7195,12 @@
   function spawnBomb() {
     if (gameOver || won || !launched || l6Transit || l8Intro) return;
     if (level().queenBoss) return; // Queen / hands: no bombs
+    if (level().warden && (!wd || !wd.visible || wd.s < 0.3 || wd.state === 'exit' || wd.collapsed)) return;
     const candidates = [];
     const gather = () => {
       for (const br of bricks) {
         if (!br.alive || br.falling || br.settled) continue;
+        if (br.hid) continue;
         candidates.push(br);
       }
     };
@@ -6683,7 +7584,7 @@
       // varias bocanadas a lo largo del suelo
       const puffs = despawnAtGround ? 2 : 5;
       for (let i = 0; i < puffs; i++) {
-        spawnGroundCloud(originX + Math.random() * (W * 0.6) + W * 0.2, despawnAtGround ? 0.7 : 1.1);
+        spawnGroundCloud((originX > -1e4 ? originX : 0) + Math.random() * (W * 0.6) + W * 0.2, despawnAtGround ? 0.7 : 1.1);
       }
     } else if (landed >= 3) {
       spawnGroundCloud(landX / landed, despawnAtGround ? 0.7 : 1.0);
@@ -7309,6 +8210,9 @@
       resizePaddleKeepCenter(basePaddleW, paddleHeightForWidth(basePaddleW));
     }
     updateBg(dt);
+    if (level().warden) {
+      try { updateWarden(dt); } catch (e) { if (!wdWarned) { wdWarned = true; console.error('warden update', e); } }
+    }
     updateL6RookFormation(dt);
     updateDodgeAI(dt);
     // Structure may have slid under the paddle (dodge/fly/jump) — re-resolve once
@@ -7425,7 +8329,7 @@
       bombTimer -= dt;
       if (bombTimer <= 0) {
         spawnBomb();
-        const every = (l6Phase === 'chess') ? BOMB_EVERY * 0.5 : BOMB_EVERY;
+        const every = ((l6Phase === 'chess') ? BOMB_EVERY * 0.5 : BOMB_EVERY) * (level().warden ? 1.6 : 1);
         const jitter = (l6Phase === 'chess') ? 0.9 : 1.8;
         bombTimer = every + Math.random() * jitter;
       }
@@ -8072,6 +8976,10 @@
       ctx.fillRect(0, 0, W, H);
       return;
     }
+    if (level().warden) {
+      try { wardenDrawBackground(); } catch (e) { if (!wdWarned) { wdWarned = true; console.error('warden bg', e); } }
+      return;
+    }
     if (level().queenBoss) {
       const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
       // Align cracked rooftop floor (groundFrac) with queen feet / groundY
@@ -8232,6 +9140,12 @@
     let rot = (Math.sin(t * 13.1) * amp) * 0.00055;
     let sx = 1, sy = 1;
 
+    // L9: cámara de moto (vibración, baches, inclinación, zoom) — solo visual
+    if (level().warden && wd && !paused) {
+      const wc = wardenCamera(t);
+      ox += wc.ox; oy += wc.oy; rot += wc.rot; sx *= wc.zoom; sy *= wc.zoom;
+    }
+
     // L8 intro: slight zoom-in as we rise to the Queen's face
     if (level().queenBoss && (l8Intro || l8Phase === 'intro' || l8Phase === 'hands' || l8Phase === 'head' || l8Phase === 'torso')) {
       const z = 1 + (l8Intro ? l8CamY * 0.04 : (l8Phase === 'torso' ? 0.03 : 0.045));
@@ -8275,13 +9189,15 @@
     if (l8Finale) { drawL8Finale(); return; }
     if (l8Skel) { drawL8SkeletonScene(); return; }
     if (level().queenBoss) drawL8Queen();
-    if (!level().queenBoss) drawGround();
-    if (!level().fly) {
+    if (!level().queenBoss && !level().warden) drawGround();
+    if (level().warden) {
+      try { drawWardenBack(); drawWardenMech(); } catch (e) { if (!wdWarned) { wdWarned = true; console.error('warden draw', e); } }
+    } else if (!level().fly) {
       if (structures.length) eachStructure(() => drawMechShadow());
       else if (!level().queenBoss) drawMechShadow();
     }
     if (structures.length) eachStructure(() => drawStructureLayer());
-    else if (!level().queenBoss) drawStructureLayer();
+    else if (!level().queenBoss && !level().warden) drawStructureLayer();
     if (structures.length) eachStructure(() => drawLooseBricks());
     else if (!level().queenBoss) drawLooseBricks();
     drawParticles();
@@ -8292,6 +9208,9 @@
     drawPaddle();
     drawBallAirTrail();
     drawBall();
+    if (level().warden) {
+      try { drawWardenFront(); } catch (e) { if (!wdWarned) { wdWarned = true; console.error('warden front', e); } }
+    }
 
     // Motion blur / smear streaks during peak head-turn
     if (l6CamFX) {
